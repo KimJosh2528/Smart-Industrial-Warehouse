@@ -1,0 +1,11 @@
+#pragma once
+
+// Copy this file to private_config.h locally and replace the placeholders.
+// Never commit private_config.h. Do not put PINs, RFID allowlists, truck
+// plates, permissions, or warehouse authorization rules in this file.
+#define FIRMWARE_WIFI_SSID "Wokwi-GUEST"
+#define FIRMWARE_WIFI_PASSWORD ""
+#define FIRMWARE_FUNCTION_BASE_URL "https://odavmzgciaoahebanpmy.supabase.co/functions/v1"
+#define FIRMWARE_DEVICE_UID "dev_028eaedec2ec3249a5fa76c2"
+#define FIRMWARE_DEVICE_HMAC_SECRET "e3e46e7ea4d65f854e795bf93df1f510baab08c1e4f8bf6457c0de3cdeacf764"
+#define FIRMWARE_TLS_CA_CERTIFICATE_PEM ""

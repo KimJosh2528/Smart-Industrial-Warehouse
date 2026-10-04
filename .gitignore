@@ -1,0 +1,38 @@
+# Local environment files and secrets
+.env
+.env.*
+!.env.example
+dashboard/.env.local
+dashboard/.env.*.local
+
+# Supabase local state and generated files
+supabase/.branches/
+supabase/.temp/
+supabase/.env
+
+# Node / Next.js output
+node_modules/
+dashboard/node_modules/
+dashboard/.next/
+dashboard/out/
+
+# Firmware build output
+firmware/.pio/
+firmware/.vscode/
+firmware/include/private_config.h
+
+# Local logs and OS files
+*.log
+.DS_Store
+Thumbs.db
+
+*.zip
+--skipLibCheck/
+
+.pio/
+
+dashboard/.env.local
+dashboard/.env
+dashboard/.next/
+dashboard/node_modules/
+dashboard/tsconfig.tsbuildinfo

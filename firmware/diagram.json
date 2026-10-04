@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "author": "Smart Industrial Warehouse",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "wokwi-esp32-devkit-v1", "id": "esp", "top": 270, "left": 480, "attrs": { "cpuFrequency": "128" } },
+    { "type": "board-mfrc522", "id": "rfid", "top": 70, "left": 50, "attrs": {} },
+    { "type": "wokwi-membrane-keypad", "id": "keypad", "top": 70, "left": 300, "attrs": { "columns": "4" } },
+    { "type": "wokwi-74hc595", "id": "shift", "top": 450, "left": 50, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht", "top": 70, "left": 700, "attrs": { "temperature": "24", "humidity": "40" } },
+    { "type": "wokwi-gas-sensor", "id": "smoke", "top": 70, "left": 900, "attrs": { "ppm": "400", "threshold": "4.4" } },
+    { "type": "wokwi-lcd1602", "id": "lcd", "top": 270, "left": 760, "attrs": { "pins": "i2c", "i2cAddress": "0x27" } },
+    { "type": "wokwi-servo", "id": "servo_staff", "top": 700, "left": 170, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo_truck", "top": 700, "left": 450, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo_fire", "top": 700, "left": 730, "attrs": {} },
+    { "type": "wokwi-buzzer", "id": "buzzer", "top": 450, "left": 1050, "attrs": {} },
+    { "type": "wokwi-relay-module", "id": "relay", "top": 450, "left": 850, "attrs": { "transistor": "npn" } },
+    { "type": "wokwi-led", "id": "led_staff_green", "top": 560, "left": 50, "attrs": { "color": "green" } },
+    { "type": "wokwi-led", "id": "led_staff_red", "top": 560, "left": 150, "attrs": { "color": "red" } },
+    { "type": "wokwi-led", "id": "led_truck_green", "top": 560, "left": 350, "attrs": { "color": "green" } },
+    { "type": "wokwi-led", "id": "led_truck_red", "top": 560, "left": 450, "attrs": { "color": "red" } },
+    { "type": "wokwi-led", "id": "led_safety_fire", "top": 560, "left": 650, "attrs": { "color": "red" } },
+    { "type": "wokwi-resistor", "id": "r_staff_green", "top": 610, "left": 50, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "r_staff_red", "top": 610, "left": 150, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "r_truck_green", "top": 610, "left": 350, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "r_truck_red", "top": 610, "left": 450, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "r_safety_fire", "top": 610, "left": 650, "attrs": { "value": "220" } }
+  ],
+  "connections": [
+    [ "esp:TX0", "$serialMonitor:RX", "", [] ],
+    [ "rfid:3.3V", "esp:3V3", "red" ], [ "rfid:GND", "esp:GND.1", "black" ], [ "rfid:SCK", "esp:18", "green" ], [ "rfid:MISO", "esp:19", "green" ], [ "rfid:MOSI", "esp:23", "green" ], [ "rfid:SDA", "esp:5", "green" ], [ "rfid:RST", "esp:4", "green" ],
+    [ "keypad:R1", "esp:12", "blue" ], [ "keypad:R2", "esp:13", "blue" ], [ "keypad:R3", "esp:14", "blue" ], [ "keypad:R4", "esp:16", "blue" ], [ "keypad:C1", "esp:17", "purple" ], [ "keypad:C2", "esp:25", "purple" ], [ "keypad:C3", "esp:26", "purple" ], [ "keypad:C4", "esp:27", "purple" ],
+    [ "dht:VCC", "esp:3V3", "red" ], [ "dht:GND", "esp:GND.1", "black" ], [ "dht:SDA", "esp:33", "orange" ], [ "smoke:VCC", "esp:VIN", "red" ], [ "smoke:GND", "esp:GND.1", "black" ], [ "smoke:AO", "esp:34", "orange" ], [ "smoke:DO", "esp:35", "orange" ],
+    [ "lcd:VCC", "esp:VIN", "red" ], [ "lcd:GND", "esp:GND.1", "black" ], [ "lcd:SDA", "esp:21", "cyan" ], [ "lcd:SCL", "esp:22", "cyan" ],
+    [ "servo_staff:V+", "esp:VIN", "red" ], [ "servo_staff:GND", "esp:GND.1", "black" ], [ "servo_staff:PWM", "esp:2", "yellow" ], [ "servo_truck:V+", "esp:VIN", "red" ], [ "servo_truck:GND", "esp:GND.1", "black" ], [ "servo_truck:PWM", "esp:15", "yellow" ], [ "servo_fire:V+", "esp:VIN", "red" ], [ "servo_fire:GND", "esp:GND.1", "black" ], [ "servo_fire:PWM", "esp:32", "yellow" ],
+    [ "shift:DS", "esp:23", "green" ], [ "shift:SHCP", "esp:18", "green" ], [ "shift:STCP", "esp:3", "green" ], [ "shift:OE", "esp:GND.1", "black" ], [ "shift:MR", "esp:3V3", "red" ], [ "shift:VCC", "esp:3V3", "red" ], [ "shift:GND", "esp:GND.1", "black" ],
+    [ "r_staff_green:1", "shift:Q0", "green" ], [ "r_staff_green:2", "led_staff_green:A", "green" ], [ "led_staff_green:C", "esp:GND.1", "black" ], [ "r_staff_red:1", "shift:Q1", "red" ], [ "r_staff_red:2", "led_staff_red:A", "red" ], [ "led_staff_red:C", "esp:GND.1", "black" ], [ "r_truck_green:1", "shift:Q2", "green" ], [ "r_truck_green:2", "led_truck_green:A", "green" ], [ "led_truck_green:C", "esp:GND.1", "black" ], [ "r_truck_red:1", "shift:Q3", "red" ], [ "r_truck_red:2", "led_truck_red:A", "red" ], [ "led_truck_red:C", "esp:GND.1", "black" ], [ "r_safety_fire:1", "shift:Q4", "red" ], [ "r_safety_fire:2", "led_safety_fire:A", "red" ], [ "led_safety_fire:C", "esp:GND.1", "black" ],
+    [ "relay:IN", "shift:Q5", "blue" ], [ "relay:VCC", "esp:VIN", "red" ], [ "relay:GND", "esp:GND.1", "black" ], [ "buzzer:1", "esp:GND.1", "black" ], [ "buzzer:2", "shift:Q6", "yellow" ]
+  ],
+  "dependencies": {}
+}
