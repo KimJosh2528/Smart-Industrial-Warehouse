@@ -1,10 +1,11 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { canAccessProtectedRouteDuringMaintenance, isMaintenanceEnabled } from "@/lib/maintenance-access.mjs";
 
 export async function middleware(request: NextRequest) {
   const response = NextResponse.next({ request });
   const pathname = request.nextUrl.pathname;
-  const maintenanceEnabled = ["1", "true", "on"].includes((process.env.WAREGUARD_MAINTENANCE_MODE ?? "").toLowerCase());
+  const maintenanceEnabled = isMaintenanceEnabled(process.env.WAREGUARD_MAINTENANCE_MODE);
   const maintenanceRoute = pathname === "/maintenance";
   const loginRoute = pathname === "/login";
   const publicRoute = maintenanceRoute || loginRoute || pathname === "/register/system-admin" || pathname.startsWith("/register/staff/") || pathname.startsWith("/register/driver/");
@@ -35,9 +36,12 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
 
   if (maintenanceEnabled && !maintenanceRoute && !loginRoute) {
-    if (!user) return NextResponse.rewrite(new URL("/maintenance", request.url));
-    const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle();
-    if (profile?.role !== "father_admin") return NextResponse.rewrite(new URL("/maintenance", request.url));
+    const { data: profile } = user
+      ? await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle()
+      : { data: null };
+    if (!canAccessProtectedRouteDuringMaintenance({ authenticated: Boolean(user), role: profile?.role })) {
+      return NextResponse.rewrite(new URL("/maintenance", request.url));
+    }
   }
 
   if (!user && !publicRoute) {
