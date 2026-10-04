@@ -1,6 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { isMaintenanceEnabled, maintenanceDestination } from "./lib/maintenance-access.mjs";
+import { isMaintenanceEnabled, requestDestination } from "./lib/maintenance-access.mjs";
 
 export async function proxy(request: NextRequest) {
   const response = NextResponse.next({ request });
@@ -14,10 +14,23 @@ export async function proxy(request: NextRequest) {
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
+  if (maintenanceRoute) {
+    response.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
+    response.headers.set("Pragma", "no-cache");
+    response.headers.set("Expires", "0");
+    return response;
+  }
+
+  const redirectToMaintenance = () => {
+    const redirectResponse = NextResponse.redirect(new URL("/maintenance", request.url));
+    redirectResponse.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
+    return redirectResponse;
+  };
+
   // Fail closed while maintenance is enabled if the server cannot validate a session.
   // The login page remains reachable so an administrator can authenticate.
   if (maintenanceEnabled && !maintenanceRoute && !loginRoute && (!url || !key)) {
-    return NextResponse.redirect(new URL("/maintenance", request.url));
+    return redirectToMaintenance();
   }
 
   if (!url || !key) return response;
@@ -40,9 +53,9 @@ export async function proxy(request: NextRequest) {
     const { data: profile } = user
       ? await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle()
       : { data: null };
-    const destination = maintenanceDestination({ authenticated: Boolean(user), role: profile?.role });
+    const destination = requestDestination({ pathname, authenticated: Boolean(user), role: profile?.role });
     if (destination === "maintenance" || (destination === "login" && registrationRoute)) {
-      return NextResponse.redirect(new URL("/maintenance", request.url));
+      return redirectToMaintenance();
     }
   }
 

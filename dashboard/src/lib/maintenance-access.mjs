@@ -16,3 +16,9 @@ export function maintenanceDestination({ authenticated, role }) {
   if (!authenticated) return "login";
   return canBypassMaintenance(role) ? "application" : "maintenance";
 }
+
+export function requestDestination({ pathname, authenticated, role }) {
+  if (pathname === "/maintenance") return "maintenance";
+  if (pathname === "/login") return "login";
+  return maintenanceDestination({ authenticated, role });
+}
