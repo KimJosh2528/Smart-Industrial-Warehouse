@@ -1,8 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { canAccessProtectedRouteDuringMaintenance, isMaintenanceEnabled } from "@/lib/maintenance-access.mjs";
+import { canAccessProtectedRouteDuringMaintenance, isMaintenanceEnabled } from "./lib/maintenance-access.mjs";
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const response = NextResponse.next({ request });
   const pathname = request.nextUrl.pathname;
   const maintenanceEnabled = isMaintenanceEnabled(process.env.WAREGUARD_MAINTENANCE_MODE);

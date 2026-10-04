@@ -12,9 +12,13 @@ const cases = [
   [null, false],
 ];
 
+const protectedPaths = ["/", "/admin/system-admins", "/settings"];
+
 for (const [role, allowed] of cases) {
   assert.equal(canBypassMaintenance(role), allowed, `${String(role)} bypass decision`);
-  assert.equal(canAccessProtectedRouteDuringMaintenance({ authenticated: true, role }), allowed, `${String(role)} protected-route decision`);
+  for (const pathname of protectedPaths) {
+    assert.equal(canAccessProtectedRouteDuringMaintenance({ authenticated: true, role }), allowed, `${String(role)} ${pathname} decision`);
+  }
 }
 
 assert.equal(canAccessProtectedRouteDuringMaintenance({ authenticated: false, role: "father_admin" }), false, "unauthenticated access decision");
