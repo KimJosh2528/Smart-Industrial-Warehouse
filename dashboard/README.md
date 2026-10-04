@@ -16,6 +16,10 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+## WareGuard maintenance mode
+
+Set the server-side `WAREGUARD_MAINTENANCE_MODE` environment variable to `true`, `1`, or `on` to show the WareGuard maintenance page and restrict application routes to authenticated `father_admin` and `system_admin` users. Leave it unset or set it to `false` for normal operation. Administrators can use `/login` to authenticate while maintenance mode is enabled.
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.

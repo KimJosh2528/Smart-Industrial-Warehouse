@@ -2,7 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 export async function middleware(request: NextRequest) {
-  let response = NextResponse.next({ request });
+  const response = NextResponse.next({ request });
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
@@ -23,7 +23,20 @@ export async function middleware(request: NextRequest) {
 
   const { data: { user } } = await supabase.auth.getUser();
   const pathname = request.nextUrl.pathname;
-  const publicRoute = pathname === "/login" || pathname === "/register/system-admin" || pathname.startsWith("/register/staff/") || pathname.startsWith("/register/driver/");
+  const maintenanceEnabled = ["1", "true", "on"].includes((process.env.WAREGUARD_MAINTENANCE_MODE ?? "").toLowerCase());
+  const maintenanceRoute = pathname === "/maintenance";
+  const publicRoute = maintenanceRoute || pathname === "/login" || pathname === "/register/system-admin" || pathname.startsWith("/register/staff/") || pathname.startsWith("/register/driver/");
+
+  if (maintenanceEnabled && !maintenanceRoute && pathname !== "/login") {
+    if (user) {
+      const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle();
+      const authorizedAdministrator = profile?.role === "father_admin" || profile?.role === "system_admin";
+      if (!authorizedAdministrator) return NextResponse.rewrite(new URL("/maintenance", request.url));
+    } else {
+      return NextResponse.rewrite(new URL("/maintenance", request.url));
+    }
+  }
+
   if (!user && !publicRoute) {
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = "/login";
