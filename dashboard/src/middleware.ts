@@ -3,9 +3,20 @@ import { NextResponse, type NextRequest } from "next/server";
 
 export async function middleware(request: NextRequest) {
   const response = NextResponse.next({ request });
+  const pathname = request.nextUrl.pathname;
+  const maintenanceEnabled = ["1", "true", "on"].includes((process.env.WAREGUARD_MAINTENANCE_MODE ?? "").toLowerCase());
+  const maintenanceRoute = pathname === "/maintenance";
+  const loginRoute = pathname === "/login";
+  const publicRoute = maintenanceRoute || loginRoute || pathname === "/register/system-admin" || pathname.startsWith("/register/staff/") || pathname.startsWith("/register/driver/");
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+
+  // Fail closed while maintenance is enabled if the server cannot validate a session.
+  // The login page remains reachable so an administrator can authenticate.
+  if (maintenanceEnabled && !maintenanceRoute && !loginRoute && (!url || !key)) {
+    return NextResponse.rewrite(new URL("/maintenance", request.url));
+  }
 
   if (!url || !key) return response;
 
@@ -22,18 +33,11 @@ export async function middleware(request: NextRequest) {
   });
 
   const { data: { user } } = await supabase.auth.getUser();
-  const pathname = request.nextUrl.pathname;
-  const maintenanceEnabled = ["1", "true", "on"].includes((process.env.WAREGUARD_MAINTENANCE_MODE ?? "").toLowerCase());
-  const maintenanceRoute = pathname === "/maintenance";
-  const publicRoute = maintenanceRoute || pathname === "/login" || pathname === "/register/system-admin" || pathname.startsWith("/register/staff/") || pathname.startsWith("/register/driver/");
 
-  if (maintenanceEnabled && !maintenanceRoute && pathname !== "/login") {
-    if (user) {
-      const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle();
-      if (profile?.role !== "father_admin") return NextResponse.rewrite(new URL("/maintenance", request.url));
-    } else {
-      return NextResponse.rewrite(new URL("/maintenance", request.url));
-    }
+  if (maintenanceEnabled && !maintenanceRoute && !loginRoute) {
+    if (!user) return NextResponse.rewrite(new URL("/maintenance", request.url));
+    const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle();
+    if (profile?.role !== "father_admin") return NextResponse.rewrite(new URL("/maintenance", request.url));
   }
 
   if (!user && !publicRoute) {
