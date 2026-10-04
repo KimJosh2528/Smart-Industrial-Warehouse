@@ -1,6 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { canAccessProtectedRouteDuringMaintenance, isMaintenanceEnabled } from "./lib/maintenance-access.mjs";
+import { isMaintenanceEnabled, maintenanceDestination } from "./lib/maintenance-access.mjs";
 
 export async function proxy(request: NextRequest) {
   const response = NextResponse.next({ request });
@@ -8,7 +8,8 @@ export async function proxy(request: NextRequest) {
   const maintenanceEnabled = isMaintenanceEnabled(process.env.WAREGUARD_MAINTENANCE_MODE);
   const maintenanceRoute = pathname === "/maintenance";
   const loginRoute = pathname === "/login";
-  const publicRoute = maintenanceRoute || loginRoute || pathname === "/register/system-admin" || pathname.startsWith("/register/staff/") || pathname.startsWith("/register/driver/");
+  const registrationRoute = pathname === "/register/system-admin" || pathname.startsWith("/register/staff/") || pathname.startsWith("/register/driver/");
+  const publicRoute = maintenanceRoute || loginRoute || registrationRoute;
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
@@ -39,7 +40,8 @@ export async function proxy(request: NextRequest) {
     const { data: profile } = user
       ? await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle()
       : { data: null };
-    if (!canAccessProtectedRouteDuringMaintenance({ authenticated: Boolean(user), role: profile?.role })) {
+    const destination = maintenanceDestination({ authenticated: Boolean(user), role: profile?.role });
+    if (destination === "maintenance" || (destination === "login" && registrationRoute)) {
       return NextResponse.rewrite(new URL("/maintenance", request.url));
     }
   }

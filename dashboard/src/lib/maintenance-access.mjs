@@ -11,3 +11,8 @@ export function canBypassMaintenance(role) {
 export function canAccessProtectedRouteDuringMaintenance({ authenticated, role }) {
   return authenticated && canBypassMaintenance(role);
 }
+
+export function maintenanceDestination({ authenticated, role }) {
+  if (!authenticated) return "login";
+  return canBypassMaintenance(role) ? "application" : "maintenance";
+}

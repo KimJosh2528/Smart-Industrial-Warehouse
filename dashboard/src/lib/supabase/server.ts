@@ -2,7 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { canAccessProtectedRouteDuringMaintenance, isMaintenanceEnabled } from "@/lib/maintenance-access.mjs";
+import { isMaintenanceEnabled, maintenanceDestination } from "@/lib/maintenance-access.mjs";
 
 export async function createClient(): Promise<SupabaseClient> {
   const cookieStore = await cookies();
@@ -32,7 +32,7 @@ export async function createClient(): Promise<SupabaseClient> {
     const { data: profile } = user
       ? await client.from("profiles").select("role").eq("id", user.id).maybeSingle()
       : { data: null };
-    if (!canAccessProtectedRouteDuringMaintenance({ authenticated: Boolean(user), role: profile?.role })) redirect("/maintenance");
+    if (maintenanceDestination({ authenticated: Boolean(user), role: profile?.role }) === "maintenance") redirect("/maintenance");
   }
 
   return client;
