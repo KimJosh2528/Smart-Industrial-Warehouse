@@ -24,4 +24,5 @@ for (const [role, allowed] of cases) {
 
 assert.equal(canAccessProtectedRouteDuringMaintenance({ authenticated: false, role: "father_admin" }), false, "unauthenticated access decision");
 assert.equal(maintenanceDestination({ authenticated: false, role: null }), "login", "unauthenticated destination");
+assert.match(await (await import("node:fs/promises")).readFile(new URL("../src/proxy.ts", import.meta.url), "utf8"), /NextResponse\.redirect\(new URL\("\/maintenance"/);
 console.log("Maintenance access regression checks passed for father_admin, system_admin, staff, driver, and unauthenticated requests.");

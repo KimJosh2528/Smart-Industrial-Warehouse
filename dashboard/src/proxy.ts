@@ -17,7 +17,7 @@ export async function proxy(request: NextRequest) {
   // Fail closed while maintenance is enabled if the server cannot validate a session.
   // The login page remains reachable so an administrator can authenticate.
   if (maintenanceEnabled && !maintenanceRoute && !loginRoute && (!url || !key)) {
-    return NextResponse.rewrite(new URL("/maintenance", request.url));
+    return NextResponse.redirect(new URL("/maintenance", request.url));
   }
 
   if (!url || !key) return response;
@@ -42,7 +42,7 @@ export async function proxy(request: NextRequest) {
       : { data: null };
     const destination = maintenanceDestination({ authenticated: Boolean(user), role: profile?.role });
     if (destination === "maintenance" || (destination === "login" && registrationRoute)) {
-      return NextResponse.rewrite(new URL("/maintenance", request.url));
+      return NextResponse.redirect(new URL("/maintenance", request.url));
     }
   }
 
