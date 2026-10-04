@@ -19,5 +19,5 @@ export const dashboardNavigation: DashboardNavigationItem[] = [
   { section: "WAREHOUSE MANAGEMENT", label: "Drivers", href: "/drivers", icon: Truck },
   { section: "WAREHOUSE MANAGEMENT", label: "Trucks", href: "/trucks", icon: Truck },
   { section: "MY ACCOUNT", label: "Account Settings", href: "/settings", icon: Users },
-  { section: "ADMINISTRATION", label: "System Administrators", href: "/admin/system-admins", icon: Users, fatherAdminOnly: true },
+  { section: "ADMINISTRATION", label: "System Admin Provisioning", href: "/admin/system-admins", icon: Users, fatherAdminOnly: true },
 ];

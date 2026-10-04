@@ -30,8 +30,7 @@ export async function middleware(request: NextRequest) {
   if (maintenanceEnabled && !maintenanceRoute && pathname !== "/login") {
     if (user) {
       const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle();
-      const authorizedAdministrator = profile?.role === "father_admin" || profile?.role === "system_admin";
-      if (!authorizedAdministrator) return NextResponse.rewrite(new URL("/maintenance", request.url));
+      if (profile?.role !== "father_admin") return NextResponse.rewrite(new URL("/maintenance", request.url));
     } else {
       return NextResponse.rewrite(new URL("/maintenance", request.url));
     }
