@@ -1,108 +1,97 @@
 import { createClient } from "./supabase/server";
 
-export const deviceTypes = ["controller", "camera", "sensor_module", "access_module", "other"] as const;
-export const deviceActivityStates = ["active", "inactive"] as const;
-export const deviceConnectivityStates = ["online", "offline", "never"] as const;
-export const environmentalStates = ["NORMAL", "WARNING", "DANGER"] as const;
+export type SensorBand = {
+  normalMin: number | null;
+  normalMax: number | null;
+  warningMin: number | null;
+  warningMax: number | null;
+  dangerMin: number | null;
+  dangerMax: number | null;
+};
 
-export type DeviceFilters = {
-  search: string;
-  deviceType: string;
-  activity: string;
-  connectivity: string;
-  environmentalState: string;
+export type DeviceConfig = {
+  areaId: string | null;
+  iotRole: "doorlock" | "sensor" | null;
+  doorlockMode: "staff" | "truck" | null;
+  temperature: SensorBand;
+  humidity: SensorBand;
+  smoke: SensorBand;
+  warningServerAlarm: boolean;
+  dangerServerAlarm: boolean;
 };
 
 export type DeviceItem = {
   id: string;
-  warehouseId: string;
   name: string;
   deviceType: string;
-  serialNumber: string | null;
   isActive: boolean;
-  capabilities: Record<string, unknown>;
-  deviceUid: string | null;
-  lastSeenAt: string | null;
   environmentalState: string | null;
-  createdAt: string;
-  updatedAt: string;
-  connectivity: "online" | "offline" | "never";
+  config: DeviceConfig;
 };
 
-export type DevicesData = {
-  configured: boolean;
-  error: string | null;
-  rows: DeviceItem[];
-};
+const emptyBand = (): SensorBand => ({ normalMin: null, normalMax: null, warningMin: null, warningMax: null, dangerMin: null, dangerMax: null });
 
-const empty = (error: string | null = null): DevicesData => ({
-  configured: !error,
-  error,
-  rows: [],
-});
-
-function validFilter<T extends readonly string[]>(values: T, value: string): value is T[number] {
-  return values.includes(value as T[number]);
+function num(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
-function getConnectivity(lastSeenAt: string | null): DeviceItem["connectivity"] {
-  if (!lastSeenAt) return "never";
-  return Date.now() - new Date(lastSeenAt).getTime() <= 5 * 60 * 1000 ? "online" : "offline";
-}
-
-export async function loadDevices(filters: DeviceFilters): Promise<DevicesData> {
+export async function loadDevices(): Promise<{ configured: boolean; error: string | null; areas: { id: string; name: string }[]; rows: DeviceItem[] }> {
   let client;
-  try {
-    client = await createClient();
-  } catch {
-    return empty("Supabase is not configured.");
-  }
+  try { client = await createClient(); } catch { return { configured: false, error: "Supabase is not configured.", areas: [], rows: [] }; }
+  const { data: authData } = await client.auth.getUser();
+  if (!authData.user) return { configured: true, error: "You must be signed in to manage IoT devices.", areas: [], rows: [] };
 
-  const { data: warehouses, error: warehouseError } = await client
-    .from("warehouses")
-    .select("id")
-    .order("name")
-    .limit(1);
+  const { data: warehouses, error: warehouseError } = await client.from("warehouses").select("id").order("name").limit(1);
   const warehouseId = warehouses?.[0]?.id;
-  if (warehouseError || !warehouseId) return empty(warehouseError?.message ?? "No warehouse is available.");
+  if (warehouseError || !warehouseId) return { configured: true, error: "No warehouse is available.", areas: [], rows: [] };
 
-  let query = client
-    .from("devices")
-    .select("id,warehouse_id,name,device_type,serial_number,is_active,capabilities,device_uid,last_seen_at,environmental_state,created_at,updated_at")
-    .eq("warehouse_id", warehouseId)
-    .order("name");
+  const [areasResult, devicesResult] = await Promise.all([
+    client.from("warehouse_areas").select("id,name").eq("warehouse_id", warehouseId).order("name"),
+    client.from("devices").select("id,name,device_type,is_active,environmental_state,area_id,iot_role,doorlock_mode").eq("warehouse_id", warehouseId).order("name"),
+  ]);
+  if (areasResult.error || devicesResult.error) return { configured: true, error: "IoT device data could not be loaded.", areas: [], rows: [] };
 
-  const search = filters.search.replace(/[^a-zA-Z0-9._:-]/g, "").trim();
-  if (search) query = query.or(`name.ilike.%${search}%,serial_number.ilike.%${search}%,device_uid.ilike.%${search}%`);
-  if (validFilter(deviceTypes, filters.deviceType)) query = query.eq("device_type", filters.deviceType);
-  if (filters.activity === "active") query = query.eq("is_active", true);
-  if (filters.activity === "inactive") query = query.eq("is_active", false);
-  if (validFilter(environmentalStates, filters.environmentalState)) query = query.eq("environmental_state", filters.environmentalState);
+  const devices = devicesResult.data ?? [];
+  const configsResult = devices.length
+    ? await client.from("device_safety_config").select("*").in("device_id", devices.map((device) => device.id))
+    : { data: [], error: null };
+  if (configsResult.error) return { configured: true, error: "Sensor configuration could not be loaded.", areas: [], rows: [] };
 
-  const { data: devices, error } = await query;
-  if (error) return empty("Devices could not be loaded.");
+  const configByDevice = new Map((configsResult.data ?? []).map((config) => [config.device_id, config]));
+  const rows = devices.map((device) => {
+    const c = configByDevice.get(device.id) as Record<string, unknown> | undefined;
+    return {
+      id: device.id,
+      name: device.name,
+      deviceType: device.device_type,
+      isActive: device.is_active,
+      environmentalState: device.environmental_state,
+      config: {
+        areaId: device.area_id ?? null,
+        iotRole: device.iot_role ?? null,
+        doorlockMode: device.doorlock_mode ?? null,
+        temperature: {
+          normalMin: num(c?.temperature_normal_min_c), normalMax: num(c?.temperature_normal_max_c),
+          warningMin: num(c?.temperature_warning_min_c), warningMax: num(c?.temperature_warning_max_c),
+          dangerMin: num(c?.temperature_danger_min_c), dangerMax: num(c?.temperature_danger_max_c),
+        },
+        humidity: {
+          normalMin: num(c?.humidity_normal_min_pct), normalMax: num(c?.humidity_normal_max_pct),
+          warningMin: num(c?.humidity_warning_min_pct), warningMax: num(c?.humidity_warning_max_pct),
+          dangerMin: num(c?.humidity_danger_min_pct), dangerMax: num(c?.humidity_danger_max_pct),
+        },
+        smoke: {
+          normalMin: num(c?.smoke_normal_min_value), normalMax: num(c?.smoke_normal_max_value),
+          warningMin: num(c?.smoke_warning_min_value), warningMax: num(c?.smoke_warning_max_value),
+          dangerMin: num(c?.smoke_danger_min_value), dangerMax: num(c?.smoke_danger_max_value),
+        },
+        warningServerAlarm: Boolean(c?.warning_server_alarm),
+        dangerServerAlarm: Boolean(c?.danger_server_alarm),
+      },
+    };
+  });
 
-  const rows = (devices ?? []).map((device) => ({
-    id: device.id,
-    warehouseId: device.warehouse_id,
-    name: device.name,
-    deviceType: device.device_type,
-    serialNumber: device.serial_number,
-    isActive: device.is_active,
-    capabilities: (device.capabilities ?? {}) as Record<string, unknown>,
-    deviceUid: device.device_uid,
-    lastSeenAt: device.last_seen_at,
-    environmentalState: device.environmental_state,
-    createdAt: device.created_at,
-    updatedAt: device.updated_at,
-    connectivity: getConnectivity(device.last_seen_at),
-  }));
-
-  return {
-    configured: true,
-    error: null,
-    rows: filters.connectivity && validFilter(deviceConnectivityStates, filters.connectivity)
-      ? rows.filter((device) => device.connectivity === filters.connectivity)
-      : rows,
-  };
+  return { configured: true, error: null, areas: (areasResult.data ?? []) as { id: string; name: string }[], rows };
 }
