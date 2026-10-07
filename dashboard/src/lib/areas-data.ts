@@ -12,7 +12,10 @@ export async function loadAreasData(): Promise<AreasData> {
   const { data: authData } = await client.auth.getUser();
   if (!authData.user) return empty(true, "You must be signed in to view warehouse areas.");
 
-  const { data: warehouses, error: warehousesError } = await client.from("warehouses").select("id,name").order("name");
+  const { data: profile } = await client.from("profiles").select("role").eq("id", authData.user.id).maybeSingle();
+  const { data: warehouses, error: warehousesError } = profile?.role === "system_admin"
+    ? await client.from("warehouses").select("id,name").eq("system_admin_id", authData.user.id).limit(1)
+    : await client.from("warehouses").select("id,name").order("name");
   if (warehousesError) return empty(true, "Warehouse data could not be loaded.");
   const warehouseRows = (warehouses ?? []) as AreaWarehouse[];
   if (!warehouseRows.length) return { configured: true, warehouses: [], areas: [], activeAreaByWarehouse: {}, error: null };
