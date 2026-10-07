@@ -43,6 +43,7 @@ export async function loadDevices(): Promise<{ configured: boolean; error: strin
   const { data: authData } = await client.auth.getUser();
   if (!authData.user) return { configured: true, error: "You must be signed in to manage IoT devices.", areas: [], rows: [] };
 
+  const { data: profile } = await client.from("profiles").select("role").eq("id", authData.user.id).maybeSingle();
   const { data: warehouses, error: warehouseError } = await client.from("warehouses").select("id,name").order("name");
   if (warehouseError || !warehouses?.length) return { configured: true, error: "No warehouse is available.", areas: [], rows: [] };
   const warehouseIds = warehouses.map((warehouse) => warehouse.id);
@@ -60,6 +61,13 @@ export async function loadDevices(): Promise<{ configured: boolean; error: strin
   }
 
   const devices = devicesResult.data ?? [];
+  console.info("[WareGuard preview][devices]", {
+    role: profile?.role ?? null,
+    warehouses: warehouses.map((warehouse) => warehouse.name),
+    areasVisible: areasResult.data?.length ?? 0,
+    devicesVisible: devices.length,
+    devicesError: devicesResult.error?.message ?? null,
+  });
   const configsResult = devices.length
     ? await client.from("device_safety_config").select("*").in("device_id", devices.map((device) => device.id))
     : { data: [], error: null };
