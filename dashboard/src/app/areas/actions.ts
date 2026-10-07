@@ -40,6 +40,32 @@ export async function addWarehouseArea(
   return { success: true, message: "Warehouse area added." };
 }
 
+export async function setActiveDemoArea(
+  _previous: AreaMutationState = initialState,
+  formData: FormData,
+): Promise<AreaMutationState> {
+  const warehouseId = String(formData.get("warehouseId") ?? "");
+  const areaId = String(formData.get("areaId") ?? "");
+  if (!warehouseId || !areaId) return { ...initialState, message: "Select an area for the demo." };
+
+  const client = await createClient();
+  const { data: authData } = await client.auth.getUser();
+  if (!authData.user) return { ...initialState, message: "You must be signed in to manage the demo area." };
+
+  const { data: area } = await client.from("warehouse_areas").select("id").eq("id", areaId).eq("warehouse_id", warehouseId).maybeSingle();
+  if (!area) return { ...initialState, message: "That area is not available for this warehouse." };
+
+  const { error } = await client.from("demo_state").upsert(
+    { warehouse_id: warehouseId, active_area_id: areaId, updated_at: new Date().toISOString() },
+    { onConflict: "warehouse_id" },
+  );
+  if (error) return { ...initialState, message: "The active demo area could not be changed." };
+
+  revalidatePath("/areas");
+  revalidatePath("/");
+  return { success: true, message: "Active demo area changed." };
+}
+
 export async function updateWarehouseAreaState(
   _previous: AreaMutationState = initialState,
   formData: FormData,
