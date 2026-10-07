@@ -8,6 +8,25 @@ import { registrationInitial } from "@/lib/registration-state";
 
 export type SystemAdminApplicationState = { success: boolean; message: string };
 
+function classifySystemAdminApplicationError(error: { message?: string; code?: string; status?: number }): string {
+  const message = (error.message ?? "").toLowerCase();
+  const code = (error.code ?? "").toLowerCase();
+
+  if (message.includes("system_admin_application_already_pending") || code === "23505") {
+    return "An application for this email is already pending Father Admin review.";
+  }
+  if (message.includes("system_admin_application_invalid")) {
+    return "Check that the Valid ID and Facebook links use the required HTTPS formats.";
+  }
+  if (code === "42883" || message.includes("submit_system_admin_application") && message.includes("does not exist")) {
+    return "System Admin registration is not configured on this environment yet. Please contact Father Admin.";
+  }
+  if (error.status === 0 || message.includes("fetch failed") || message.includes("network")) {
+    return "The registration service could not be reached. Please try again.";
+  }
+  return "The application could not be submitted. Check the links and try again.";
+}
+
 function classifySignupError(error: { message?: string; code?: string; status?: number }): string {
   const message = (error.message ?? "").toLowerCase();
   const code = (error.code ?? "").toLowerCase();
@@ -114,6 +133,6 @@ export async function submitSystemAdminApplication(
     p_facebook_profile_url: facebookProfileUrl,
     p_requested_warehouse_name: warehouseName,
   });
-  if (error) return { success: false, message: "The application could not be submitted. Check the links and try again." };
+  if (error) return { success: false, message: classifySystemAdminApplicationError(error) };
   return { success: true, message: "Application submitted. Father Admin review is required before account setup." };
 }
