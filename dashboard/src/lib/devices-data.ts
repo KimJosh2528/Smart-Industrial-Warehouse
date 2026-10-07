@@ -73,7 +73,7 @@ export async function loadDevices(): Promise<{ configured: boolean; error: strin
   const configsResult = devices.length
     ? await client.from("device_safety_config").select("*").in("device_id", devices.map((device) => device.id))
     : { data: [], error: null };
-  if (configsResult.error) return { configured: true, error: "Sensor configuration could not be loaded.", areas: [], rows: [] };
+  if (configsResult.error) return { configured: true, error: "Sensor configuration could not be loaded.", areas: [], rows: [], debug: { role: profile?.role ?? null, warehouseCount: warehouses.length, areaCount: areasResult.data?.length ?? 0, deviceCount: devices.length } };
 
   const configByDevice = new Map((configsResult.data ?? []).map((config) => [config.device_id, config]));
   const rows = devices.map((device) => {
