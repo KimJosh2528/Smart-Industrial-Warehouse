@@ -27,7 +27,7 @@ export async function loadAreasData(): Promise<AreasData> {
   if (warehousesResult.error || typesResult.error) return empty(true, "Warehouse area data could not be loaded.");
 
   const warehouses = (warehousesResult.data ?? []) as AreaWarehouse[];
-  if (!warehouses.length) return { configured: true, warehouses: [], types: (typesResult.data ?? []) as WarehouseAreaType[], areas: [], departments: [], departmentDefaults: [], error: null };
+  if (!warehouses.length) return { configured: true, warehouses: [], types: (typesResult.data ?? []) as WarehouseAreaType[], areas: [], activeAreaByWarehouse: {}, departments: [], departmentDefaults: [], error: null };
 
   const { data: areas, error: areasError } = await client
     .from("warehouse_areas")
