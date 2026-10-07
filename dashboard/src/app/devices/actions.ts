@@ -60,7 +60,7 @@ export async function saveDeviceConfiguration(_previous: DeviceMutationState = i
       temperature_warning_min_c: temp.wmin, temperature_warning_max_c: temp.wmax,
       temperature_danger_min_c: temp.dmin, temperature_danger_max_c: temp.dmax,
       humidity_normal_min_pct: humidity.nmin, humidity_normal_max_pct: humidity.nmax,
-      humidity_warning_min_pct: humidity.wmin, humidity.warningMax: humidity.wmax,
+      humidity_warning_min_pct: humidity.wmin, humidity_warning_max_pct: humidity.wmax,
       humidity_danger_min_pct: humidity.dmin, humidity_danger_max_pct: humidity.dmax,
       smoke_normal_min_value: smoke.nmin, smoke_normal_max_value: smoke.nmax,
       smoke_warning_min_value: smoke.wmin, smoke_warning_max_value: smoke.wmax,
