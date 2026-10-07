@@ -74,7 +74,9 @@ export async function loadDashboardData(): Promise<DashboardData> {
     role = profile?.role === "father_admin" || profile?.role === "system_admin" ? profile.role : null;
   }
 
-  const { data: warehouses, error } = await client.from("warehouses").select("id,name").order("name");
+  const { data: warehouses, error } = role === "system_admin"
+    ? await client.from("warehouses").select("id,name").eq("system_admin_id", authData.user.id).limit(1)
+    : await client.from("warehouses").select("id,name").order("name");
   if (error || !warehouses?.length) return { ...blank(true), displayName, role };
   const warehouseId = warehouses[0].id;
   const today = midnight().toISOString();
