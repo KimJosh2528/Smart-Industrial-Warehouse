@@ -26,7 +26,7 @@ export function WarehouseAreaManager({ warehouses, types, areas, activeAreaByWar
 
   useEffect(() => {
     if (addState.success || stateState.success || demoState.success) router.refresh();
-  }, [addState, stateState, router]);
+  }, [addState, stateState, demoState, router]);
 
   const areasByWarehouse = new Map<string, WarehouseArea[]>();
   for (const area of areas) areasByWarehouse.set(area.warehouse_id, [...(areasByWarehouse.get(area.warehouse_id) ?? []), area]);
@@ -46,7 +46,7 @@ export function WarehouseAreaManager({ warehouses, types, areas, activeAreaByWar
         </div>
       </section>;
     })}
-    {(addState.message || stateState.message || demoState.message) && <p className={`rounded-xl border px-4 py-3 text-sm ${addState.success || stateState.success ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-200" : "border-rose-400/20 bg-rose-400/10 text-rose-200"}`}>{addState.message || stateState.message || demoState.message}</p>}
+    {(addState.message || stateState.message || demoState.message) && <p className={`rounded-xl border px-4 py-3 text-sm ${addState.success || stateState.success || demoState.success ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-200" : "border-rose-400/20 bg-rose-400/10 text-rose-200"}`}>{addState.message || stateState.message || demoState.message}</p>}
   </div>;
 }
 
