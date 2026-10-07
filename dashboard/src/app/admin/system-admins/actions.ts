@@ -3,9 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { registrationOrigin } from "@/lib/account-claim-server";
 
 export type PromoteSystemAdminState = { success: boolean; message: string };
 export type CreateWarehouseState = { success: boolean; message: string };
+export type SystemAdminApplicationActionState = { success: boolean; message: string; registrationLink?: string; expiresAt?: string };
 
 const profileIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -122,4 +124,36 @@ export async function createWarehouse(
   revalidatePath("/admin/system-admins");
   revalidatePath("/");
   return { success: true, message: "Warehouse created." };
+}
+
+export async function approveSystemAdminApplication(
+  _previous: SystemAdminApplicationActionState = { success: false, message: "" },
+  formData: FormData,
+): Promise<SystemAdminApplicationActionState> {
+  const applicationId = String(formData.get("applicationId") ?? "");
+  const warehouseName = String(formData.get("warehouseName") ?? "");
+  if (!applicationId) return { success: false, message: "The application request was invalid." };
+  const client = await createClient();
+  const { data, error } = await client.rpc("approve_system_admin_application", {
+    p_application_id: applicationId,
+    p_warehouse_name: warehouseName || null,
+  });
+  if (error || !data?.[0]?.raw_token) return { success: false, message: "The application could not be approved." };
+  const result = data[0] as { raw_token: string; expires_at: string };
+  revalidatePath("/admin/system-admins");
+  return { success: true, message: "Application approved. Send this one-time claim link to the applicant.", registrationLink: `${registrationOrigin()}/register/system-admin/${result.raw_token}`, expiresAt: result.expires_at };
+}
+
+export async function rejectSystemAdminApplication(
+  _previous: SystemAdminApplicationActionState = { success: false, message: "" },
+  formData: FormData,
+): Promise<SystemAdminApplicationActionState> {
+  const applicationId = String(formData.get("applicationId") ?? "");
+  const reason = String(formData.get("reason") ?? "");
+  if (!applicationId) return { success: false, message: "The application request was invalid." };
+  const client = await createClient();
+  const { error } = await client.rpc("reject_system_admin_application", { p_application_id: applicationId, p_rejection_reason: reason || null });
+  if (error) return { success: false, message: "The application could not be rejected." };
+  revalidatePath("/admin/system-admins");
+  return { success: true, message: "Application rejected." };
 }

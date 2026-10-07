@@ -26,7 +26,7 @@ export function DepartmentManager({ departments, warehouses }: { departments: Ar
     </div>
 
     {warehouses.length > 0 && <form action={createAction} className="grid gap-3 rounded-xl border border-white/[0.06] bg-[#10233d] p-4 md:grid-cols-[1fr_1fr_auto] md:items-end">
-      <input type="hidden" name="warehouseId" value={warehouses[0].id} />
+      <label className="text-xs text-slate-400">Warehouse<select name="warehouseId" defaultValue={warehouses.find(() => true)?.id ?? ""} required disabled={pending} className="mt-1 w-full rounded-md border border-white/10 bg-[#0b1d34] px-3 py-2 text-sm text-white outline-none focus:border-cyan-300">{warehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}</select></label>
       <label className="text-xs text-slate-400">Department Name<input name="name" required className="mt-1 w-full rounded-md border border-white/10 bg-[#0b1d34] px-3 py-2 text-sm text-white outline-none focus:border-cyan-300" placeholder="Customs" disabled={pending} /></label>
       <label className="text-xs text-slate-400">Department Code<input name="code" required className="mt-1 w-full rounded-md border border-white/10 bg-[#0b1d34] px-3 py-2 text-sm uppercase text-white outline-none focus:border-cyan-300" placeholder="CUS" disabled={pending} /></label>
       <button type="submit" disabled={pending} className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50"><PlusIcon />{createPending ? "Adding..." : "Add department"}</button>

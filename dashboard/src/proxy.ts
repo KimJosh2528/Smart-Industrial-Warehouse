@@ -23,6 +23,7 @@ export async function proxy(request: NextRequest) {
 
   const redirectToMaintenance = () => {
     const redirectResponse = NextResponse.redirect(new URL("/maintenance", request.url));
+    copySupabaseResponseState(response, redirectResponse);
     redirectResponse.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
     return redirectResponse;
   };
@@ -47,26 +48,40 @@ export async function proxy(request: NextRequest) {
     },
   });
 
-  const { data: { user } } = await supabase.auth.getUser();
+  // Claims are verified by Supabase and are safe to use for request routing.
+  // Do not trust the session cookie directly in proxy code.
+  const { data: claims } = await supabase.auth.getClaims();
+  const userId = claims?.claims.sub;
+  const authenticated = Boolean(userId);
 
   if (maintenanceEnabled && !maintenanceRoute && !loginRoute) {
-    const { data: profile } = user
-      ? await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle()
+    const { data: profile } = userId
+      ? await supabase.from("profiles").select("role").eq("id", userId).maybeSingle()
       : { data: null };
-    const destination = requestDestination({ pathname, authenticated: Boolean(user), role: profile?.role });
+    const destination = requestDestination({ pathname, authenticated, role: profile?.role });
     if (destination === "maintenance" || (destination === "login" && registrationRoute)) {
       return redirectToMaintenance();
     }
   }
 
-  if (!user && !publicRoute) {
+  if (!authenticated && !publicRoute) {
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = "/login";
     loginUrl.search = "";
-    return NextResponse.redirect(loginUrl);
+    const loginResponse = NextResponse.redirect(loginUrl);
+    copySupabaseResponseState(response, loginResponse);
+    return loginResponse;
   }
 
   return response;
+}
+
+function copySupabaseResponseState(source: NextResponse, destination: NextResponse) {
+  source.cookies.getAll().forEach((cookie) => destination.cookies.set(cookie));
+  for (const header of ["cache-control", "expires", "pragma"] as const) {
+    const value = source.headers.get(header);
+    if (value) destination.headers.set(header, value);
+  }
 }
 
 export const config = {

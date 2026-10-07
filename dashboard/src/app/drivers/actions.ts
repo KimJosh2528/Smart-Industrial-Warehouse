@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { registrationOrigin } from "@/lib/account-claim-server";
+import { resolveAuthorizedWarehouseId } from "@/lib/warehouse-scope";
 
 export type CreateDriverState = { success: boolean; message: string };
 export type DriverAssignmentState = { success: boolean; message: string };
@@ -40,11 +41,11 @@ export async function createDriver(_previous: CreateDriverState = initial, formD
   if (!warehouseId || !displayName.trim()) return { ...initial, message: "Enter a driver display name." };
 
   const client = await createClient();
-  const { data: authData } = await client.auth.getUser();
-  if (!authData.user) return { ...initial, message: "You must be signed in to create drivers." };
+  const authorizedWarehouseId = await resolveAuthorizedWarehouseId(client, warehouseId);
+  if (!authorizedWarehouseId) return { ...initial, message: "You are not authorized to create drivers in that warehouse." };
 
   const { error } = await client.rpc("create_driver", {
-    p_warehouse_id: warehouseId,
+    p_warehouse_id: authorizedWarehouseId,
     p_display_name: displayName,
     p_driver_code: driverCode || null,
     p_is_active: isActive,

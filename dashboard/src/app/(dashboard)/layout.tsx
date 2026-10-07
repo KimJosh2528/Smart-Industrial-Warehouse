@@ -16,6 +16,6 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const role = profile?.role === "father_admin" || profile?.role === "system_admin" ? profile.role : null;
   const { data: warehouse } = role === "system_admin"
     ? await client.from("warehouses").select("name").eq("system_admin_id", data.user.id).maybeSingle()
-    : await client.from("warehouses").select("name").order("name").limit(1).maybeSingle();
+    : { data: null };
   return <DashboardShell displayName={displayName} role={role} warehouseContext={warehouse?.name ?? null}>{children}</DashboardShell>;
 }

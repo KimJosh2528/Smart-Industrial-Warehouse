@@ -1,4 +1,5 @@
 import { createClient } from "./supabase/server";
+import { getAuthorizedWarehouses } from "./warehouse-scope";
 
 export const accessMethods = ["staff_rfid", "staff_pin", "truck_plate", "truck_rfid", "unknown"] as const;
 export const accessResults = ["success", "failure", "denied"] as const;
@@ -68,18 +69,15 @@ export async function loadAccessLogs(filters: AccessLogFilters): Promise<AccessL
     return empty(filters, "Supabase is not configured.");
   }
 
-  const { data: warehouses, error: warehouseError } = await client
-    .from("warehouses")
-    .select("id")
-    .order("name")
-    .limit(1);
-  const warehouseId = warehouses?.[0]?.id;
-  if (warehouseError || !warehouseId) return empty(filters, warehouseError?.message ?? "No warehouse is available.");
+  const scope = await getAuthorizedWarehouses(client);
+  if (scope.error) return empty(filters, scope.error);
+  const warehouseIds = scope.warehouses.map((warehouse) => warehouse.id);
+  if (!warehouseIds.length) return empty(filters, "No warehouse is available.");
 
   const { data: areaRows } = await client
     .from("warehouse_areas")
     .select("id,area_type_code")
-    .eq("warehouse_id", warehouseId);
+    .in("warehouse_id", warehouseIds);
   const { data: areaTypes } = await client.from("warehouse_area_types").select("code,name");
   const areaTypeNames = new Map((areaTypes ?? []).map((item) => [item.code, item.name]));
   const areas = (areaRows ?? []).map((item) => ({ id: item.id, name: areaTypeNames.get(item.area_type_code) ?? item.area_type_code }));
@@ -87,7 +85,7 @@ export async function loadAccessLogs(filters: AccessLogFilters): Promise<AccessL
   let query = client
     .from("access_logs")
     .select("id,area_id,device_id,credential_id,staff_member_id,truck_id,event_type,authentication_method,result,occurred_at,metadata", { count: "exact" })
-    .eq("warehouse_id", warehouseId)
+    .in("warehouse_id", warehouseIds)
     .order("occurred_at", { ascending: false });
 
   if (filters.result && accessResults.includes(filters.result as (typeof accessResults)[number])) query = query.eq("result", filters.result);

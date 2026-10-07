@@ -6,6 +6,8 @@ import { hashClaimToken } from "@/lib/account-claim-server";
 import type { RegistrationState } from "@/lib/registration-state";
 import { registrationInitial } from "@/lib/registration-state";
 
+export type SystemAdminApplicationState = { success: boolean; message: string };
+
 function classifySignupError(error: { message?: string; code?: string; status?: number }): string {
   const message = (error.message ?? "").toLowerCase();
   const code = (error.code ?? "").toLowerCase();
@@ -47,7 +49,7 @@ export async function registerAndClaim(
   const password = String(formData.get("password") ?? "");
   const confirmation = String(formData.get("confirmation") ?? "");
 
-  if (!token || !["staff", "driver"].includes(kind) || !email || !password) {
+  if (!token || !["staff", "driver", "system_admin"].includes(kind) || !email || !password) {
     return { ...registrationInitial, message: "Complete all required fields." };
   }
   if (password.length < 8) return { ...registrationInitial, message: "Password must be at least 8 characters." };
@@ -89,4 +91,29 @@ export async function signInAndClaim(
   if (claimError) return { ...registrationInitial, message: "The registration link is invalid, expired, or already used." };
 
   redirect("/login?claimed=1");
+}
+
+export async function submitSystemAdminApplication(
+  _previous: SystemAdminApplicationState = { success: false, message: "" },
+  formData: FormData,
+): Promise<SystemAdminApplicationState> {
+  const applicantName = String(formData.get("applicantName") ?? "").trim();
+  const email = String(formData.get("email") ?? "").trim();
+  const validIdUrl = String(formData.get("validIdUrl") ?? "").trim();
+  const facebookProfileUrl = String(formData.get("facebookProfileUrl") ?? "").trim();
+  const warehouseName = String(formData.get("warehouseName") ?? "").trim();
+  if (!applicantName || !email || !validIdUrl || !facebookProfileUrl || !warehouseName) {
+    return { success: false, message: "Complete all application fields." };
+  }
+
+  const client = await createClient();
+  const { error } = await client.rpc("submit_system_admin_application", {
+    p_applicant_name: applicantName,
+    p_applicant_email: email,
+    p_valid_id_url: validIdUrl,
+    p_facebook_profile_url: facebookProfileUrl,
+    p_requested_warehouse_name: warehouseName,
+  });
+  if (error) return { success: false, message: "The application could not be submitted. Check the links and try again." };
+  return { success: true, message: "Application submitted. Father Admin review is required before account setup." };
 }

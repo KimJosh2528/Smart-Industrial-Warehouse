@@ -1,5 +1,6 @@
 import { createClient } from "./supabase/server";
 import type { AccountClaim } from "./account-claims";
+import { getAuthorizedWarehouses } from "./warehouse-scope";
 
 export type DriverWarehouse = { id: string; name: string };
 
@@ -41,18 +42,16 @@ export async function loadDriverData(): Promise<DriverData> {
     return empty("Supabase is not configured.");
   }
 
-  const { data: authData } = await client.auth.getUser();
-  if (!authData.user) return { ...empty("You must be signed in to view drivers."), configured: true };
-  const { data: profile } = await client.from("profiles").select("role").eq("id", authData.user.id).maybeSingle();
-  const role = profile?.role === "father_admin" || profile?.role === "system_admin" ? profile.role : null;
+  const scope = await getAuthorizedWarehouses(client);
+  const role = scope.role;
+  if (scope.error) return { ...empty(scope.error), configured: true, role };
 
-  const [{ data: warehouses, error: warehouseError }, { data: drivers, error: driverError }] = await Promise.all([
-    client.from("warehouses").select("id,name").order("name"),
-    client.from("drivers").select("id,warehouse_id,display_name,driver_code,is_active,profile_id").order("display_name"),
+  const [{ data: drivers, error: driverError }] = await Promise.all([
+    client.from("drivers").select("id,warehouse_id,display_name,driver_code,is_active,profile_id").in("warehouse_id", scope.warehouses.map((warehouse) => warehouse.id)).order("display_name"),
   ]);
-  if (warehouseError || driverError) return { configured: true, role, warehouses: [], rows: [], error: "Driver data could not be loaded." };
+  if (driverError) return { configured: true, role, warehouses: [], rows: [], error: "Driver data could not be loaded." };
 
-  const visibleWarehouses = (warehouses ?? []).map((warehouse) => ({ id: warehouse.id, name: warehouse.name }));
+  const visibleWarehouses = scope.warehouses;
   const warehouseNames = new Map(visibleWarehouses.map((warehouse) => [warehouse.id, warehouse.name]));
   const warehouseIds = visibleWarehouses.map((warehouse) => warehouse.id);
   const { data: trucks, error: truckError } = warehouseIds.length

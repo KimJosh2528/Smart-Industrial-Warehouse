@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { resolveAuthorizedWarehouseId } from "@/lib/warehouse-scope";
 
 export type AreaMutationState = { success: boolean; message: string };
 const initialState: AreaMutationState = { success: false, message: "" };
@@ -23,16 +24,13 @@ export async function addWarehouseArea(
   if (!warehouseId || !areaTypeCode) return { ...initialState, message: "Select a warehouse area type." };
 
   const client = await createClient();
-  const { data: authData } = await client.auth.getUser();
-  if (!authData.user) return { ...initialState, message: "You must be signed in to manage warehouse areas." };
-
-  const { data: visibleWarehouse, error: warehouseError } = await client.from("warehouses").select("id").eq("id", warehouseId).maybeSingle();
-  if (warehouseError || !visibleWarehouse) return { ...initialState, message: "You are not authorized to change this warehouse." };
+  const authorizedWarehouseId = await resolveAuthorizedWarehouseId(client, warehouseId);
+  if (!authorizedWarehouseId) return { ...initialState, message: "You are not authorized to change this warehouse." };
 
   const { data: knownType, error: typeError } = await client.from("warehouse_area_types").select("code").eq("code", areaTypeCode).maybeSingle();
   if (typeError || !knownType) return { ...initialState, message: "That area type is not available." };
 
-  const { error } = await client.from("warehouse_areas").insert({ warehouse_id: warehouseId, area_type_code: areaTypeCode, state: "locked" });
+  const { error } = await client.from("warehouse_areas").insert({ warehouse_id: authorizedWarehouseId, area_type_code: areaTypeCode, state: "locked" });
   if (error) return { ...initialState, message: safeAreaError(error.message, "add") };
 
   revalidatePath("/areas");
@@ -140,11 +138,11 @@ export async function createDepartment(
   if (!warehouseId || !name.trim() || !code.trim()) return { ...departmentInitial, message: "Department name and code are required." };
 
   const client = await createClient();
-  const { data: authData } = await client.auth.getUser();
-  if (!authData.user) return { ...departmentInitial, message: "You must be signed in to manage departments." };
+  const authorizedWarehouseId = await resolveAuthorizedWarehouseId(client, warehouseId);
+  if (!authorizedWarehouseId) return { ...departmentInitial, message: "You are not authorized to manage this warehouse." };
 
   const { error } = await client.rpc("create_department", {
-    p_warehouse_id: warehouseId,
+    p_warehouse_id: authorizedWarehouseId,
     p_name: name,
     p_code: code,
   });

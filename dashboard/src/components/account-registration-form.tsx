@@ -5,10 +5,10 @@ import type { RegistrationState } from "@/lib/registration-state";
 import { registrationInitial } from "@/lib/registration-state";
 import { registerAndClaim, signInAndClaim } from "@/app/register/actions";
 
-export function AccountRegistrationForm({ token, kind }: { token: string; kind: "staff" | "driver" }) {
+export function AccountRegistrationForm({ token, kind }: { token: string; kind: "staff" | "driver" | "system_admin" }) {
   const [state, action, pending] = useActionState<RegistrationState, FormData>(registerAndClaim, registrationInitial);
   const [signInState, signInAction, signInPending] = useActionState<RegistrationState, FormData>(signInAndClaim, registrationInitial);
-  const label = kind === "staff" ? "staff" : "driver";
+  const label = kind === "staff" ? "staff" : kind === "driver" ? "driver" : "System Admin";
 
   if (state.requiresConfirmation) return <div className="space-y-4">
     <p className="rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-sm text-amber-200">{state.message}</p>

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { credentialManagementDiagnostic, credentialManagementError, invokeCredentialManagement } from "@/lib/credential-management";
+import { resolveAuthorizedWarehouseId } from "@/lib/warehouse-scope";
 
 export type TruckMutationState = { success: boolean; message: string };
 export type TruckCredentialMutationState = { success: boolean; message: string };
@@ -37,8 +38,10 @@ export async function createTruck(_previous: TruckMutationState = initial, formD
 
   const client = await authenticatedClient();
   if (!client) return { ...initial, message: "You must be signed in to create trucks." };
+  const authorizedWarehouseId = await resolveAuthorizedWarehouseId(client, warehouseId);
+  if (!authorizedWarehouseId) return { ...initial, message: "You are not authorized to create trucks in that warehouse." };
   const { error } = await client.rpc("create_truck", {
-    p_warehouse_id: warehouseId,
+    p_warehouse_id: authorizedWarehouseId,
     p_identity_label: identityLabel,
     p_plate_number: plateNumber,
     p_division: division || null,

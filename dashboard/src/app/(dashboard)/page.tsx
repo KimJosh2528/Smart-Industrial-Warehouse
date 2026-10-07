@@ -8,7 +8,9 @@ import { Bell, CalendarDays, ChevronRight, CircleAlert, DoorOpen, Droplets, Moni
 export default async function Home() {
   const data = await loadDashboardData();
   const hasWarehouse = data.warehouses.length > 0;
-  const currentWarehouse = data.warehouses[0]?.name ?? "Warehouse";
+  const currentWarehouse = data.selectedWarehouseId
+    ? data.warehouses.find((warehouse) => warehouse.id === data.selectedWarehouseId)?.name ?? "Warehouse"
+    : "Warehouse";
   return <>
     <header className="mb-7 flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-300/80">Operations Center</p><h1 className="mt-1 text-2xl font-semibold tracking-tight text-white sm:text-3xl">Dashboard Overview</h1><p className="mt-2 text-sm text-slate-400">Good afternoon, {data.displayName}. Here&apos;s the current operating picture.</p></div><div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-slate-400"><span className={`h-2 w-2 rounded-full ${hasWarehouse ? "bg-emerald-400" : "bg-slate-500"}`} />{hasWarehouse ? "Live overview" : "No warehouse data"}</div></header>
     {!data.configured && <div className="mb-6 rounded-xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-200">Supabase is not configured for this dashboard. Connect the environment variables to load live warehouse data.</div>}

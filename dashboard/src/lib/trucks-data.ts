@@ -1,4 +1,5 @@
 import { createClient } from "./supabase/server";
+import { getAuthorizedWarehouses } from "./warehouse-scope";
 
 export type TruckWarehouse = { id: string; name: string };
 
@@ -41,19 +42,18 @@ export async function loadTruckData(): Promise<TruckData> {
     return empty("Supabase is not configured.");
   }
 
-  const { data: authData } = await client.auth.getUser();
-  if (!authData.user) return { ...empty("You must be signed in to view trucks."), configured: true };
-  const { data: profile } = await client.from("profiles").select("role").eq("id", authData.user.id).maybeSingle();
-  const role = profile?.role === "father_admin" || profile?.role === "system_admin" ? profile.role : null;
+  const scope = await getAuthorizedWarehouses(client);
+  const role = scope.role;
+  if (scope.error) return { ...empty(scope.error), configured: true, role };
+  const warehouseIds = scope.warehouses.map((warehouse) => warehouse.id);
 
-  const [{ data: warehouses, error: warehouseError }, { data: trucks, error: truckError }, { data: credentials, error: credentialError }] = await Promise.all([
-    client.from("warehouses").select("id,name").order("name"),
-    client.from("trucks").select("id,warehouse_id,identity_label,plate_number,division,is_active,current_driver_id").order("identity_label"),
+  const [{ data: trucks, error: truckError }, { data: credentials, error: credentialError }] = await Promise.all([
+    client.from("trucks").select("id,warehouse_id,identity_label,plate_number,division,is_active,current_driver_id").in("warehouse_id", warehouseIds).order("identity_label"),
     client.rpc("list_truck_credentials"),
   ]);
-  if (warehouseError || truckError || credentialError) return { configured: true, role, warehouses: [], rows: [], error: "Truck data could not be loaded." };
+  if (truckError || credentialError) return { configured: true, role, warehouses: [], rows: [], error: "Truck data could not be loaded." };
 
-  const visibleWarehouses = (warehouses ?? []).map((warehouse) => ({ id: warehouse.id, name: warehouse.name }));
+  const visibleWarehouses = scope.warehouses;
   const warehouseNames = new Map(visibleWarehouses.map((warehouse) => [warehouse.id, warehouse.name]));
   const driverIds = [...new Set((trucks ?? []).map((truck) => truck.current_driver_id).filter((id): id is string => id !== null))];
   const { data: drivers, error: driverError } = driverIds.length

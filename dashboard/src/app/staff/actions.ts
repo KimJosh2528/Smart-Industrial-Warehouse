@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { credentialManagementDiagnostic, credentialManagementError, invokeCredentialManagement } from "@/lib/credential-management";
 import { registrationOrigin } from "@/lib/account-claim-server";
+import { resolveAuthorizedWarehouseId } from "@/lib/warehouse-scope";
 
 export type CredentialMutationState = {
   success: boolean;
@@ -53,11 +54,11 @@ export async function createStaff(_previous: CreateStaffState = createStaffIniti
   if (!warehouseId || !displayName.trim()) return { ...createStaffInitial, message: "Enter a staff display name." };
 
   const client = await createClient();
-  const { data: authData } = await client.auth.getUser();
-  if (!authData.user) return { ...createStaffInitial, message: "You must be signed in to create staff." };
+  const authorizedWarehouseId = await resolveAuthorizedWarehouseId(client, warehouseId);
+  if (!authorizedWarehouseId) return { ...createStaffInitial, message: "You are not authorized to create staff in that warehouse." };
 
   const { error } = await client.rpc("create_staff", {
-    p_warehouse_id: warehouseId,
+    p_warehouse_id: authorizedWarehouseId,
     p_display_name: displayName,
     p_employee_code: employeeCode || null,
     p_department_id: departmentId || null,

@@ -1,4 +1,5 @@
 import { createClient } from "./supabase/server";
+import { getAuthorizedWarehouses } from "./warehouse-scope";
 
 export const deviceTypes = ["controller", "camera", "sensor_module", "access_module", "other"] as const;
 export const deviceActivityStates = ["active", "inactive"] as const;
@@ -58,18 +59,15 @@ export async function loadDevices(filters: DeviceFilters): Promise<DevicesData> 
     return empty("Supabase is not configured.");
   }
 
-  const { data: warehouses, error: warehouseError } = await client
-    .from("warehouses")
-    .select("id")
-    .order("name")
-    .limit(1);
-  const warehouseId = warehouses?.[0]?.id;
-  if (warehouseError || !warehouseId) return empty(warehouseError?.message ?? "No warehouse is available.");
+  const scope = await getAuthorizedWarehouses(client);
+  if (scope.error) return empty(scope.error);
+  const warehouseIds = scope.warehouses.map((warehouse) => warehouse.id);
+  if (!warehouseIds.length) return empty("No warehouse is available.");
 
   let query = client
     .from("devices")
     .select("id,warehouse_id,name,device_type,serial_number,is_active,capabilities,device_uid,last_seen_at,environmental_state,created_at,updated_at")
-    .eq("warehouse_id", warehouseId)
+    .in("warehouse_id", warehouseIds)
     .order("name");
 
   const search = filters.search.replace(/[^a-zA-Z0-9._:-]/g, "").trim();

@@ -8,7 +8,7 @@ const initialState: CreateDriverState = { success: false, message: "" };
 
 export function AddDriverForm({ warehouses }: { warehouses: DriverWarehouse[] }) {
   const [state, formAction, pending] = useActionState(createDriver, initialState);
-  const [warehouseId, setWarehouseId] = useState(warehouses[0]?.id ?? "");
+  const [warehouseId, setWarehouseId] = useState(warehouses.find(() => true)?.id ?? "");
 
   return <form action={formAction} className="rounded-2xl border border-cyan-300/15 bg-[#0b1d34] p-5">
     <div className="mb-4">

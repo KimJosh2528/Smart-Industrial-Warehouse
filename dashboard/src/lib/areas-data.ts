@@ -1,4 +1,5 @@
 import { createClient } from "./supabase/server";
+import { getAuthorizedWarehouses } from "./warehouse-scope";
 
 export type WarehouseAreaType = { code: string; name: string; sort_order: number };
 export type WarehouseArea = { id: string; warehouse_id: string; area_type_code: string; state: string; created_at: string; updated_at: string };
@@ -17,16 +18,13 @@ export async function loadAreasData(): Promise<AreasData> {
     return empty(false, "Supabase is not configured.");
   }
 
-  const { data: authData } = await client.auth.getUser();
-  if (!authData.user) return empty(true, "You must be signed in to view warehouse areas.");
+  const scope = await getAuthorizedWarehouses(client);
+  if (scope.error) return empty(true, scope.error);
 
-  const [warehousesResult, typesResult] = await Promise.all([
-    client.from("warehouses").select("id,name").order("name"),
-    client.from("warehouse_area_types").select("code,name,sort_order").order("sort_order"),
-  ]);
-  if (warehousesResult.error || typesResult.error) return empty(true, "Warehouse area data could not be loaded.");
+  const typesResult = await client.from("warehouse_area_types").select("code,name,sort_order").order("sort_order");
+  if (typesResult.error) return empty(true, "Warehouse area data could not be loaded.");
 
-  const warehouses = (warehousesResult.data ?? []) as AreaWarehouse[];
+  const warehouses = scope.warehouses as AreaWarehouse[];
   if (!warehouses.length) return { configured: true, warehouses: [], types: (typesResult.data ?? []) as WarehouseAreaType[], areas: [], departments: [], departmentDefaults: [], error: null };
 
   const { data: areas, error: areasError } = await client

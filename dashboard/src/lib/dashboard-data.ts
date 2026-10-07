@@ -1,4 +1,5 @@
 import { createClient } from "./supabase/server";
+import { getAuthorizedWarehouses } from "./warehouse-scope";
 
 export type AccessRow = {
   id: string;
@@ -65,33 +66,33 @@ export async function loadDashboardData(): Promise<DashboardData> {
   const { data: authData } = await client.auth.getUser();
   let displayName = authData.user?.user_metadata?.display_name ??
     authData.user?.user_metadata?.name ?? "there";
-  let role: DashboardData["role"] = null;
+  const scope = await getAuthorizedWarehouses(client);
+  const role = scope.role;
+  if (scope.error) return { ...blank(true), displayName, role };
   if (authData.user) {
-    const { data: profile } = await client.from("profiles").select("display_name,role")
+    const { data: profile } = await client.from("profiles").select("display_name")
       .eq("id", authData.user.id).maybeSingle();
     displayName = profile?.display_name ?? displayName;
-    role = profile?.role === "father_admin" || profile?.role === "system_admin" ? profile.role : null;
   }
-
-  const { data: warehouses, error } = await client.from("warehouses").select("id,name").order("name");
-  if (error || !warehouses?.length) return { ...blank(true), displayName, role };
-  const warehouseId = warehouses[0].id;
+  const warehouses = scope.warehouses;
+  if (!warehouses.length) return { ...blank(true), displayName, role };
+  const warehouseIds = warehouses.map((warehouse) => warehouse.id);
   const today = midnight().toISOString();
   const sevenDaysAgo = midnight(6).toISOString();
 
   const [staffResult, truckResult, areaResult, deviceResult, todayAccessResult, recentResult,
     safetyResult, readingResult, emergencyResult, activityResult, openSafetyResult] = await Promise.all([
-    client.from("staff_members").select("id,display_name,is_active").eq("warehouse_id", warehouseId),
-    client.from("trucks").select("id,identity_label,is_active").eq("warehouse_id", warehouseId),
-    client.from("warehouse_areas").select("id,area_type_code").eq("warehouse_id", warehouseId),
-    client.from("devices").select("id,name,last_seen_at").eq("warehouse_id", warehouseId).order("name"),
-    client.from("access_logs").select("id,occurred_at,result,authentication_method,area_id,staff_member_id,truck_id,metadata").eq("warehouse_id", warehouseId).gte("occurred_at", today),
-    client.from("access_logs").select("id,occurred_at,result,authentication_method,area_id,staff_member_id,truck_id,metadata").eq("warehouse_id", warehouseId).order("occurred_at", { ascending: false }).limit(10),
-    client.from("safety_events").select("severity,status").eq("warehouse_id", warehouseId).gte("occurred_at", today),
-    client.from("sensor_readings").select("temperature_c,humidity_pct,smoke_value").eq("warehouse_id", warehouseId).order("recorded_at", { ascending: false }).limit(1).maybeSingle(),
-    client.from("warehouse_emergency_states").select("state,reason").eq("warehouse_id", warehouseId).maybeSingle(),
-    client.from("access_logs").select("occurred_at,result").eq("warehouse_id", warehouseId).gte("occurred_at", sevenDaysAgo),
-    client.from("safety_events").select("severity,status").eq("warehouse_id", warehouseId).neq("status", "resolved"),
+    client.from("staff_members").select("id,display_name,is_active").in("warehouse_id", warehouseIds),
+    client.from("trucks").select("id,identity_label,is_active").in("warehouse_id", warehouseIds),
+    client.from("warehouse_areas").select("id,area_type_code").in("warehouse_id", warehouseIds),
+    client.from("devices").select("id,name,last_seen_at").in("warehouse_id", warehouseIds).order("name"),
+    client.from("access_logs").select("id,occurred_at,result,authentication_method,area_id,staff_member_id,truck_id,metadata").in("warehouse_id", warehouseIds).gte("occurred_at", today),
+    client.from("access_logs").select("id,occurred_at,result,authentication_method,area_id,staff_member_id,truck_id,metadata").in("warehouse_id", warehouseIds).order("occurred_at", { ascending: false }).limit(10),
+    client.from("safety_events").select("severity,status").in("warehouse_id", warehouseIds).gte("occurred_at", today),
+    client.from("sensor_readings").select("temperature_c,humidity_pct,smoke_value").in("warehouse_id", warehouseIds).order("recorded_at", { ascending: false }).limit(1).maybeSingle(),
+    client.from("warehouse_emergency_states").select("state,reason").in("warehouse_id", warehouseIds).order("changed_at", { ascending: false }).limit(1).maybeSingle(),
+    client.from("access_logs").select("occurred_at,result").in("warehouse_id", warehouseIds).gte("occurred_at", sevenDaysAgo),
+    client.from("safety_events").select("severity,status").in("warehouse_id", warehouseIds).neq("status", "resolved"),
   ]);
 
   const staff = staffResult.data ?? [];
@@ -116,7 +117,7 @@ export async function loadDashboardData(): Promise<DashboardData> {
 
   return {
     ...blank(true), displayName, role,
-    warehouses: warehouses.map((item) => ({ id: item.id, name: item.name })), selectedWarehouseId: warehouseId,
+    warehouses: warehouses.map((item) => ({ id: item.id, name: item.name })), selectedWarehouseId: role === "system_admin" ? warehouses.find(() => true)?.id ?? null : null,
     staff: { total: staff.length, active: staff.filter((item) => item.is_active).length, inactive: staff.filter((item) => !item.is_active).length },
     trucks: { total: trucks.length, active: trucks.filter((item) => item.is_active).length, inactive: trucks.filter((item) => !item.is_active).length },
     accessToday: { total: todayAccess.length, authorized: todayAccess.filter((item) => item.result === "success").length, denied: todayAccess.filter((item) => item.result !== "success").length },

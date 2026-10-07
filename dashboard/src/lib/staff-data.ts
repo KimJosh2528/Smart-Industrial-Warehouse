@@ -1,5 +1,6 @@
 import { createClient } from "./supabase/server";
 import type { AccountClaim } from "./account-claims";
+import { getAuthorizedWarehouses } from "./warehouse-scope";
 
 export type StaffCredential = {
   id: string;
@@ -75,27 +76,13 @@ export async function loadStaffData(): Promise<StaffData> {
     return empty(false, "Supabase is not configured.");
   }
 
-  const { data: authData } = await client.auth.getUser();
-  if (!authData.user) return empty(true, "You must be signed in to view staff.");
-
-  const { data: profile } = await client
-    .from("profiles")
-    .select("role")
-    .eq("id", authData.user.id)
-    .maybeSingle();
-  const role = profile?.role === "father_admin" || profile?.role === "system_admin"
-    ? profile.role
-    : null;
+  const scope = await getAuthorizedWarehouses(client);
+  const role = scope.role;
+  if (scope.error) return { ...empty(true, scope.error), role };
 
   // The authenticated server client and existing RLS determine which
   // warehouses are visible. No warehouse ID is accepted from the client.
-  const { data: warehouses, error: warehouseError } = await client
-    .from("warehouses")
-    .select("id,name")
-    .order("name");
-  if (warehouseError) return { ...empty(true, "Staff data could not be loaded."), role };
-
-  const visibleWarehouses = warehouses ?? [];
+  const visibleWarehouses = scope.warehouses;
   if (!visibleWarehouses.length) return { configured: true, role, warehouses: [], departments: {}, rows: [], error: null };
 
   const warehouseIds = visibleWarehouses.map((warehouse) => warehouse.id);

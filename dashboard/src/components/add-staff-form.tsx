@@ -9,7 +9,7 @@ const initialState: CreateStaffState = { success: false, message: "" };
 
 export function AddStaffForm({ warehouses, departments }: { warehouses: StaffWarehouse[]; departments: Record<string, StaffDepartment[]> }) {
   const [state, formAction, pending] = useActionState(createStaffAction, initialState);
-  const [warehouseId, setWarehouseId] = useState(warehouses[0]?.id ?? "");
+  const [warehouseId, setWarehouseId] = useState(warehouses.find(() => true)?.id ?? "");
   const availableDepartments = useMemo(() => departments[warehouseId] ?? [], [departments, warehouseId]);
 
   return <form action={formAction} className="rounded-2xl border border-blue-300/15 bg-[#0b1d34] p-5">
