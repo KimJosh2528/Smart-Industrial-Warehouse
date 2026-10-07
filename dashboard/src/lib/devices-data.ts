@@ -43,13 +43,13 @@ export async function loadDevices(): Promise<{ configured: boolean; error: strin
   const { data: authData } = await client.auth.getUser();
   if (!authData.user) return { configured: true, error: "You must be signed in to manage IoT devices.", areas: [], rows: [] };
 
-  const { data: warehouses, error: warehouseError } = await client.from("warehouses").select("id").order("name").limit(1);
-  const warehouseId = warehouses?.[0]?.id;
-  if (warehouseError || !warehouseId) return { configured: true, error: "No warehouse is available.", areas: [], rows: [] };
+  const { data: warehouses, error: warehouseError } = await client.from("warehouses").select("id,name").order("name");
+  if (warehouseError || !warehouses?.length) return { configured: true, error: "No warehouse is available.", areas: [], rows: [] };
+  const warehouseIds = warehouses.map((warehouse) => warehouse.id);
 
   const [areasResult, devicesResult] = await Promise.all([
-    client.from("warehouse_areas").select("id,name").eq("warehouse_id", warehouseId).order("name"),
-    client.from("devices").select("id,name,device_type,is_active,environmental_state,area_id,iot_role,doorlock_mode").eq("warehouse_id", warehouseId).order("name"),
+    client.from("warehouse_areas").select("id,name").in("warehouse_id", warehouseIds).order("name"),
+    client.from("devices").select("id,name,device_type,is_active,environmental_state,area_id,iot_role,doorlock_mode").in("warehouse_id", warehouseIds).order("name"),
   ]);
   if (areasResult.error || devicesResult.error) return { configured: true, error: "IoT device data could not be loaded.", areas: [], rows: [] };
 
