@@ -44,7 +44,10 @@ export async function loadDevices(): Promise<{ configured: boolean; error: strin
   const { data: authData } = await client.auth.getUser();
   if (!authData.user) return { configured: true, error: "You must be signed in to manage IoT devices.", areas: [], rows: [] };
 
-  const { data: warehouses, error: warehouseError } = await client.from("warehouses").select("id,name").order("name");
+  const { data: profile } = await client.from("profiles").select("role").eq("id", authData.user.id).maybeSingle();
+  const { data: warehouses, error: warehouseError } = profile?.role === "system_admin"
+    ? await client.from("warehouses").select("id,name").eq("system_admin_id", authData.user.id).limit(1)
+    : await client.from("warehouses").select("id,name").order("name");
   if (warehouseError || !warehouses?.length) return { configured: true, error: "No warehouse is available.", areas: [], rows: [] };
   const warehouseIds = warehouses.map((warehouse) => warehouse.id);
 
