@@ -51,7 +51,13 @@ export async function loadDevices(): Promise<{ configured: boolean; error: strin
     client.from("warehouse_areas").select("id,name").in("warehouse_id", warehouseIds).order("name"),
     client.from("devices").select("id,name,device_type,is_active,environmental_state,area_id,iot_role,doorlock_mode").in("warehouse_id", warehouseIds).order("name"),
   ]);
-  if (areasResult.error || devicesResult.error) return { configured: true, error: "IoT device data could not be loaded.", areas: [], rows: [] };
+  if (areasResult.error || devicesResult.error) {
+    const details = [
+      areasResult.error ? `Areas: ${areasResult.error.message}` : null,
+      devicesResult.error ? `Devices: ${devicesResult.error.message}` : null,
+    ].filter(Boolean).join(" | ");
+    return { configured: true, error: `IoT device data could not be loaded. ${details}`, areas: [], rows: [] };
+  }
 
   const devices = devicesResult.data ?? [];
   const configsResult = devices.length
