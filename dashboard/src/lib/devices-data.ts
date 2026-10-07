@@ -38,7 +38,7 @@ function num(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export async function loadDevices(): Promise<{ configured: boolean; error: string | null; areas: { id: string; name: string }[]; rows: DeviceItem[]; debug: { role: string | null; warehouseCount: number; areaCount: number; deviceCount: number } }> {
+export async function loadDevices(): Promise<{ configured: boolean; error: string | null; areas: { id: string; name: string }[]; rows: DeviceItem[] }> {
   let client;
   try { client = await createClient(); } catch { return { configured: false, error: "Supabase is not configured.", areas: [], rows: [] }; }
   const { data: authData } = await client.auth.getUser();
