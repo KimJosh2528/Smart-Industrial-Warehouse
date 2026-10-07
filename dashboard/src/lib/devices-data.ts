@@ -37,15 +37,16 @@ function num(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export async function loadDevices(): Promise<{ configured: boolean; error: string | null; areas: { id: string; name: string }[]; rows: DeviceItem[] }> {
+export async function loadDevices(): Promise<{ configured: boolean; error: string | null; areas: { id: string; name: string }[]; rows: DeviceItem[]; debug: { role: string | null; warehouseCount: number; areaCount: number; deviceCount: number } }> {
+  const emptyDebug = { role: null, warehouseCount: 0, areaCount: 0, deviceCount: 0 };
   let client;
-  try { client = await createClient(); } catch { return { configured: false, error: "Supabase is not configured.", areas: [], rows: [] }; }
+  try { client = await createClient(); } catch { return { configured: false, error: "Supabase is not configured.", areas: [], rows: [], debug: emptyDebug }; }
   const { data: authData } = await client.auth.getUser();
-  if (!authData.user) return { configured: true, error: "You must be signed in to manage IoT devices.", areas: [], rows: [] };
+  if (!authData.user) return { configured: true, error: "You must be signed in to manage IoT devices.", areas: [], rows: [], debug: emptyDebug };
 
   const { data: profile } = await client.from("profiles").select("role").eq("id", authData.user.id).maybeSingle();
   const { data: warehouses, error: warehouseError } = await client.from("warehouses").select("id,name").order("name");
-  if (warehouseError || !warehouses?.length) return { configured: true, error: "No warehouse is available.", areas: [], rows: [] };
+  if (warehouseError || !warehouses?.length) return { configured: true, error: "No warehouse is available.", areas: [], rows: [], debug: { role: profile?.role ?? null, warehouseCount: warehouses?.length ?? 0, areaCount: 0, deviceCount: 0 } };
   const warehouseIds = warehouses.map((warehouse) => warehouse.id);
 
   const [areasResult, devicesResult] = await Promise.all([
@@ -58,7 +59,7 @@ export async function loadDevices(): Promise<{ configured: boolean; error: strin
       areasResult.error ? `Areas: ${areasResult.error.message}` : null,
       devicesResult.error ? `Devices: ${devicesResult.error.message}` : null,
     ].filter(Boolean).join(" | ");
-    return { configured: true, error: `IoT device data could not be loaded. ${details}`, areas: [], rows: [] };
+    return { configured: true, error: `IoT device data could not be loaded. ${details}`, areas: [], rows: [], debug: { role: profile?.role ?? null, warehouseCount: warehouses.length, areaCount: areasResult.data?.length ?? 0, deviceCount: devicesResult.data?.length ?? 0 } };
   }
 
   const devices = devicesResult.data ?? [];
@@ -108,5 +109,5 @@ export async function loadDevices(): Promise<{ configured: boolean; error: strin
     };
   });
 
-  return { configured: true, error: null, areas: (areasResult.data ?? []) as { id: string; name: string }[], rows };
+  return { configured: true, error: null, areas: (areasResult.data ?? []) as { id: string; name: string }[], rows, debug: { role: profile?.role ?? null, warehouseCount: warehouses.length, areaCount: areasResult.data?.length ?? 0, deviceCount: rows.length } };
 }
