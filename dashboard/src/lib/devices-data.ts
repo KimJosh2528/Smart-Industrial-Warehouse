@@ -52,6 +52,7 @@ export async function loadDevices(): Promise<{ configured: boolean; error: strin
     client.from("warehouse_areas").select("id,name").in("warehouse_id", warehouseIds).order("name"),
     client.from("devices").select("id,name,device_type,is_active,environmental_state,area_id,iot_role,doorlock_mode").in("warehouse_id", warehouseIds).order("name"),
   ]);
+  const deviceQueryError = devicesResult.error?.message ?? null;
   if (areasResult.error || devicesResult.error) {
     const details = [
       areasResult.error ? `Areas: ${areasResult.error.message}` : null,
@@ -66,7 +67,7 @@ export async function loadDevices(): Promise<{ configured: boolean; error: strin
     warehouses: warehouses.map((warehouse) => warehouse.name),
     areasVisible: areasResult.data?.length ?? 0,
     devicesVisible: devices.length,
-    devicesError: devicesResult.error?.message ?? null,
+    devicesError: deviceQueryError,
   });
   const configsResult = devices.length
     ? await client.from("device_safety_config").select("*").in("device_id", devices.map((device) => device.id))
