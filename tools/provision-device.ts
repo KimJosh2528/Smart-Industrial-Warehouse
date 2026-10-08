@@ -26,21 +26,19 @@ const args = [...Deno.args];
 if (args.includes("--help")) {
   console.log(
     "Usage: deno run --allow-env --allow-net tools/provision-device.ts " +
-    "--actor-id <father-admin-uuid> --warehouse-id <uuid> [--device-type <type>] [--uid <uid>] \"Device name\"",
+    "--actor-id <father-admin-uuid> --device-id <uuid> [--uid <uid>] \"Device name\"",
   );
   Deno.exit(0);
 }
 
 const actorId = option(args, "--actor-id");
-const warehouseId = option(args, "--warehouse-id");
-const deviceType = option(args, "--device-type") ?? "controller";
+const deviceId = option(args, "--device-id");
 const requestedUid = option(args, "--uid");
 const deviceName = args.length === 1 ? args[0].trim() : "";
 
 if (!actorId || !/^[0-9a-fA-F-]{36}$/.test(actorId)) fail("Use --actor-id with the Father Admin profile UUID.");
-if (!warehouseId || !/^[0-9a-fA-F-]{36}$/.test(warehouseId)) fail("Use --warehouse-id with a valid warehouse UUID.");
+if (!deviceId || !/^[0-9a-fA-F-]{36}$/.test(deviceId)) fail("Use --device-id with a valid vacant device UUID.");
 if (!deviceName) fail("Provide exactly one non-empty device name.");
-if (!["controller", "camera", "sensor_module", "access_module", "other"].includes(deviceType)) fail("Invalid device type.");
 if (requestedUid && !/^[A-Za-z0-9._:-]{1,128}$/.test(requestedUid)) fail("Invalid device UID format.");
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
