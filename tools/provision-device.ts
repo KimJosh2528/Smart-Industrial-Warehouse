@@ -5,10 +5,10 @@ function fail(message: string): never {
   Deno.exit(1);
 }
 
-function sanitizePostgrestMessage(value: unknown): string {
+function sanitizeMessage(value: unknown): string {
   if (typeof value !== "string") return "request failed";
   return value
-    .replace(/(device_secret_encrypted|DEVICE_SECRET_KEY_HEX|SUPABASE_SERVICE_ROLE_KEY|authorization|bearer)/gi, "[redacted]")
+    .replace(/(device_secret_encrypted|DEVICE_SECRET_KEY_HEX|SUPABASE_SECRET_KEYS|SUPABASE_SERVICE_ROLE_KEY|authorization|bearer)/gi, "[redacted]")
     .replace(/[A-Za-z0-9+/=_-]{32,}/g, "[redacted]")
     .slice(0, 500);
 }
@@ -24,15 +24,20 @@ function option(args: string[], name: string): string | undefined {
 
 const args = [...Deno.args];
 if (args.includes("--help")) {
-  console.log("Usage: deno run --allow-env --allow-net tools/provision-device.ts --warehouse-id <uuid> \"Device name\"");
+  console.log(
+    "Usage: deno run --allow-env --allow-net tools/provision-device.ts " +
+    "--actor-id <father-admin-uuid> --warehouse-id <uuid> [--device-type <type>] [--uid <uid>] \"Device name\"",
+  );
   Deno.exit(0);
 }
 
+const actorId = option(args, "--actor-id");
 const warehouseId = option(args, "--warehouse-id");
 const deviceType = option(args, "--device-type") ?? "controller";
 const requestedUid = option(args, "--uid");
 const deviceName = args.length === 1 ? args[0].trim() : "";
 
+if (!actorId || !/^[0-9a-fA-F-]{36}$/.test(actorId)) fail("Use --actor-id with the Father Admin profile UUID.");
 if (!warehouseId || !/^[0-9a-fA-F-]{36}$/.test(warehouseId)) fail("Use --warehouse-id with a valid warehouse UUID.");
 if (!deviceName) fail("Provide exactly one non-empty device name.");
 if (!["controller", "camera", "sensor_module", "access_module", "other"].includes(deviceType)) fail("Invalid device type.");
@@ -42,9 +47,10 @@ const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
 const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const encryptionKeyHex = Deno.env.get("DEVICE_SECRET_KEY_HEX") ?? "";
 if (!supabaseUrl || !serviceRoleKey) fail("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.");
-if (!/^[0-9a-fA-F]{64}$/.test(encryptionKeyHex)) fail("DEVICE_SECRET_KEY_HEX must be a 64-character hexadecimal server key.");
+if (!/^[0-9a-fA-F]{64}$/.test(encryptionKeyHex)) fail("DEVICE_SECRET_KEY_HEX must be a 64-character server key.");
 
 await sodium.ready;
+
 const deviceSecret = sodium.to_hex(sodium.randombytes_buf(32));
 const nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES);
 const ciphertext = sodium.crypto_secretbox_easy(
@@ -57,52 +63,60 @@ packed.set(nonce);
 packed.set(ciphertext, nonce.length);
 const encryptedSecret = sodium.to_base64(packed, sodium.base64_variants.ORIGINAL);
 
-let created: { id: string; device_uid: string } | undefined;
-for (let attempt = 0; attempt < 5 && !created; attempt += 1) {
-  const deviceUid = requestedUid ?? `dev_${sodium.to_hex(sodium.randombytes_buf(12))}`;
-  const response = await fetch(`${supabaseUrl.replace(/\/$/, "")}/rest/v1/devices`, {
+const baseUrl = supabaseUrl.replace(/\/$/, "");
+const headers = {
+  apikey: serviceRoleKey,
+  Authorization: `Bearer ${serviceRoleKey}`,
+  "Content-Type": "application/json",
+};
+
+async function rpc(name: string, body: Record<string, unknown>): Promise<unknown> {
+  const response = await fetch(`${baseUrl}/rest/v1/rpc/${name}`, {
     method: "POST",
-    headers: {
-      apikey: serviceRoleKey,
-      Authorization: `Bearer ${serviceRoleKey}`,
-      "Content-Type": "application/json",
-      Prefer: "return=representation",
-    },
-    body: JSON.stringify({
-      warehouse_id: warehouseId,
-      name: deviceName,
-      device_type: deviceType,
-      device_uid: deviceUid,
-      device_secret_encrypted: encryptedSecret,
-      capabilities: {},
-    }),
+    headers,
+    body: JSON.stringify(body),
   });
 
-  if (response.ok) {
-    const rows = await response.json() as Array<{ id: string; device_uid: string }>;
-    created = rows[0];
-    break;
+  if (!response.ok) {
+    let message: unknown;
+    try {
+      const payload = await response.json() as Record<string, unknown>;
+      message = payload.message;
+    } catch {
+      message = undefined;
+    }
+    fail(`${name} failed (HTTP ${response.status}): ${sanitizeMessage(message)}`);
   }
 
-  if (response.status === 409 && !requestedUid) continue;
-  if (response.status === 409) fail("The requested device UID already exists.");
-
-  let code = "unknown";
-  let message: unknown;
-  try {
-    const payload = await response.json() as Record<string, unknown>;
-    if (typeof payload.code === "string") code = payload.code.slice(0, 64);
-    message = payload.message;
-  } catch {
-    message = undefined;
-  }
-  fail(`HTTP status: ${response.status}\nPostgREST code: ${code}\nMessage: ${sanitizePostgrestMessage(message)}`);
+  return response.json();
 }
 
-if (!created) fail("Could not generate a unique device UID.");
+const intent = await rpc("create_device_provisioning_intent", {
+  p_actor_user_id: actorId,
+  p_device_id: option(args, "--device-id"),
+  p_operation: "provision",
+  p_encrypted_secret: encryptedSecret,
+  p_requested_device_uid: requestedUid ?? `dev_${sodium.to_hex(sodium.randombytes_buf(12))}`,
+  p_target_warehouse_id: warehouseId,
+  p_reason: "Initial device provisioning",
+});
 
-console.log("Device created.");
-console.log(`Device ID: ${created.id}`);
-console.log(`Device UID: ${created.device_uid}`);
+const intentRow = Array.isArray(intent) ? intent[0] as Record<string, unknown> | undefined : undefined;
+const intentToken = typeof intentRow?.intent_token === "string" ? intentRow.intent_token : "";
+if (!intentToken) fail("Provisioning intent was created but no one-time token was returned.");
+
+const result = await rpc("consume_device_provisioning_intent", {
+  p_intent_token: intentToken,
+  p_encrypted_secret: encryptedSecret,
+});
+
+const device = Array.isArray(result) ? result[0] as Record<string, unknown> | undefined : undefined;
+if (!device?.device_id || !device?.device_uid) fail("Provisioning completed without a device result.");
+
+console.log("Device provisioned.");
+console.log(`Device ID: ${String(device.device_id)}`);
+console.log(`Device UID: ${String(device.device_uid)}`);
+console.log(`Lifecycle: ${String(device.lifecycle_status)}`);
+console.log(`Credential version: ${String(device.credential_version)}`);
 console.log(`Device secret (displayed once): ${deviceSecret}`);
 console.log("Store the secret only in the device's private ignored firmware configuration.");
