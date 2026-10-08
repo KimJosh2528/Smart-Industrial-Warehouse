@@ -116,7 +116,7 @@ export async function encryptDeviceSecret(secret: string, keyHex: string): Promi
 }
 
 export function mapRpcError(error: unknown): string {
-  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  const message = String((error as { message?: unknown } | null)?.message ?? "").toLowerCase();
   if (message.includes("device is not vacant")) return "device_not_vacant";
   if (message.includes("father admin actor required")) return "not_authorized";
   if (message.includes("device not found")) return "device_not_found";
@@ -177,7 +177,7 @@ const VALIDATION_CODES = new Set([
 function safeCode(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
   if (VALIDATION_CODES.has(message)) return message;
-  if (message === "server_configuration_error") return message;
+  if (message === "server_configuration_error" || message === "profile_lookup_failed") return message;
   if (message === "device_not_vacant" || message === "not_authorized" || message === "device_not_found" || message === "intent_failed" || message === "provisioning_failed") {
     return message;
   }
@@ -185,7 +185,7 @@ function safeCode(error: unknown): string {
 }
 
 function statusForCode(code: string): number {
-  if (code === "server_configuration_error") return 500;
+  if (code === "server_configuration_error" || code === "profile_lookup_failed") return 500;
   if (code === "not_authorized") return 403;
   if (code === "device_not_found") return 404;
   if (code === "device_not_vacant") return 409;

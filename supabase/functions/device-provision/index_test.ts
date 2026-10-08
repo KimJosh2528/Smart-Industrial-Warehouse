@@ -154,6 +154,30 @@ Deno.test("maps every RPC error to a safe code and status", async () => {
   }
 });
 
+Deno.test("maps plain-object RPC errors and profile lookup failures safely", async () => {
+  assertEquals(mapRpcError({ message: "device is not vacant" }), "device_not_vacant");
+
+  configureTestEnvironment();
+  const profileFailure = createProvisionHandler(dependencies({
+    isFatherAdmin: async () => { throw new Error("profile_lookup_failed"); },
+  }));
+  const profileResponse = await profileFailure(request("POST", { operation: "rotate", device_id: DEVICE_ID }));
+  assertEquals(profileResponse.status, 500);
+  assertEquals((await responseBody(profileResponse)).error, "profile_lookup_failed");
+
+  for (const [message, expected, status] of [
+    ["device not found", "device_not_found", 404],
+    ["device is not vacant", "device_not_vacant", 409],
+  ] as const) {
+    const handler = createProvisionHandler(dependencies({
+      createIntent: async () => { throw new Error(mapRpcError({ message })); },
+    }));
+    const response = await handler(request("POST", { operation: "rotate", device_id: DEVICE_ID }));
+    assertEquals(response.status, status);
+    assertEquals((await responseBody(response)).error, expected);
+  }
+});
+
 Deno.test("does not leak raw RPC errors or secrets", async () => {
   configureTestEnvironment();
   const original = console.error;
