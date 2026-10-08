@@ -91,11 +91,11 @@ async function rpc(name: string, body: Record<string, unknown>): Promise<unknown
 
 const intent = await rpc("create_device_provisioning_intent", {
   p_actor_user_id: actorId,
-  p_device_id: option(args, "--device-id"),
+  p_device_id: deviceId,
   p_operation: "provision",
   p_encrypted_secret: encryptedSecret,
   p_requested_device_uid: requestedUid ?? `dev_${sodium.to_hex(sodium.randombytes_buf(12))}`,
-  p_target_warehouse_id: warehouseId,
+  p_target_warehouse_id: null,
   p_reason: "Initial device provisioning",
 });
 
