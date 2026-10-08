@@ -1,4 +1,6 @@
-import sodium from "npm:libsodium-wrappers@0.7.15";
+import sodiumModule from "npm:libsodium-wrappers@0.7.15";
+
+const sodium = sodiumModule as any;
 
 const TIMESTAMP_TOLERANCE_SECONDS = 60;
 const DEVICE_UID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;

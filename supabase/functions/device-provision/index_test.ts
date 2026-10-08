@@ -1,6 +1,8 @@
-import sodium from "npm:libsodium-wrappers@0.7.15";
+import sodiumModule from "npm:libsodium-wrappers@0.7.15";
 import { assert, assertEquals, assertFalse, assertStringIncludes } from "jsr:@std/assert@1";
-import { createProvisionHandler, encryptDeviceSecret } from "./index.ts";
+import { createProvisionHandler, encryptDeviceSecret, mapRpcError } from "./handler.ts";
+
+const sodium = sodiumModule as any;
 
 const ACTOR_ID = "11111111-1111-4111-8111-111111111111";
 const DEVICE_ID = "22222222-2222-4222-8222-222222222222";
@@ -14,15 +16,20 @@ function configureTestEnvironment() {
   Deno.env.set("DEVICE_SECRET_KEY_HEX", KEY_HEX);
 }
 
-function request(method = "POST", body?: unknown, token = "test-jwt") {
+function request(method = "POST", body?: unknown, token: string | null = "test-jwt") {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (token !== null) headers.set("Authorization", `Bearer ${token}`);
   return new Request("https://example.test", {
     method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+}
+
+function rawRequest(body: string, token: string | null = "test-jwt") {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (token !== null) headers.set("Authorization", `Bearer ${token}`);
+  return new Request("https://example.test", { method: "POST", headers, body });
 }
 
 function dependencies(overrides: Record<string, unknown> = {}) {
@@ -47,10 +54,12 @@ async function responseBody(response: Response) {
   return await response.json() as Record<string, unknown>;
 }
 
-Deno.test("requires a valid bearer token", async () => {
+Deno.test("missing or invalid bearer token returns 401", async () => {
   configureTestEnvironment();
-  const handler = createProvisionHandler(dependencies({ getUserId: async () => null }));
-  assertEquals((await handler(request("POST", {}))).status, 401);
+  const missing = createProvisionHandler(dependencies());
+  assertEquals((await missing(request("POST", {}, null))).status, 401);
+  const invalid = createProvisionHandler(dependencies({ getUserId: async () => null }));
+  assertEquals((await invalid(request("POST", {}))).status, 401);
 });
 
 Deno.test("rejects actor_user_id supplied by the caller", async () => {
@@ -61,10 +70,26 @@ Deno.test("rejects actor_user_id supplied by the caller", async () => {
   assertEquals((await responseBody(response)).error, "actor_user_id_forbidden");
 });
 
-Deno.test("requires Father Admin authorization", async () => {
+Deno.test("Father Admin authorization happens before body validation", async () => {
   configureTestEnvironment();
   const handler = createProvisionHandler(dependencies({ isFatherAdmin: async () => false }));
-  assertEquals((await handler(request("POST", { operation: "rotate", device_id: DEVICE_ID }))).status, 403);
+  const response = await handler(rawRequest("not-json"));
+  assertEquals(response.status, 403);
+  assertEquals((await responseBody(response)).error, "not_authorized");
+});
+
+Deno.test("returns 500 for server configuration errors and 400 for invalid JSON", async () => {
+  configureTestEnvironment();
+  Deno.env.delete("DEVICE_SECRET_KEY_HEX");
+  const configurationFailure = createProvisionHandler(dependencies());
+  assertEquals((await configurationFailure(request("POST", {}))).status, 500);
+  assertEquals((await configurationFailure(request("POST", {})).then(responseBody)).error, "server_configuration_error");
+
+  configureTestEnvironment();
+  const invalidJson = createProvisionHandler(dependencies());
+  const response = await invalidJson(rawRequest("not-json"));
+  assertEquals(response.status, 400);
+  assertEquals((await responseBody(response)).error, "invalid_json");
 });
 
 Deno.test("rejects invalid fields and methods", async () => {
@@ -77,25 +102,59 @@ Deno.test("rejects invalid fields and methods", async () => {
   assertEquals((await handler(request("POST", { operation: "rotate", device_id: DEVICE_ID, unexpected: true }))).status, 400);
 });
 
-Deno.test("returns the raw secret once without encrypted_secret", async () => {
+Deno.test("maps provision, rotate, and reassign arguments", async () => {
   configureTestEnvironment();
-  let createArgs: Record<string, unknown> | undefined;
+  const calls: Record<string, unknown>[] = [];
   const handler = createProvisionHandler(dependencies({
     createIntent: async (args: Record<string, unknown>) => {
-      createArgs = args;
+      calls.push(args);
       return { intent_token: "intent-test", expires_at: new Date().toISOString() };
     },
   }));
+  await handler(request("POST", { operation: "provision", device_id: DEVICE_ID, device_uid: "device-1", reason: "new" }));
+  await handler(request("POST", { operation: "rotate", device_id: DEVICE_ID, reason: "rotate" }));
+  await handler(request("POST", { operation: "reassign", device_id: DEVICE_ID, target_warehouse_id: WAREHOUSE_ID, reason: "move" }));
+  assertEquals(calls.map((call) => call.p_operation), ["provision", "rotate", "reassign"]);
+  assertEquals(calls[0].p_requested_device_uid, "device-1");
+  assertEquals(calls[1].p_requested_device_uid, null);
+  assertEquals(calls[2].p_target_warehouse_id, WAREHOUSE_ID);
+  assertEquals(calls[0].p_target_warehouse_id, null);
+});
+
+Deno.test("returns the raw secret once without encrypted_secret", async () => {
+  configureTestEnvironment();
+  const handler = createProvisionHandler(dependencies());
   const response = await handler(request("POST", { operation: "provision", device_id: DEVICE_ID, device_uid: "warehouse-gateway-01" }));
   const body = await responseBody(response);
   assertEquals(response.status, 200);
   assertEquals(body.device_secret, "aa".repeat(32));
   assertFalse(Object.prototype.hasOwnProperty.call(body, "encrypted_secret"));
   assertEquals(response.headers.get("Cache-Control"), "no-store");
-  assertEquals(createArgs?.p_actor_user_id, ACTOR_ID);
 });
 
-Deno.test("maps RPC errors safely and does not log secrets", async () => {
+Deno.test("maps every RPC error to a safe code and status", async () => {
+  const cases = [
+    ["device is not vacant", "device_not_vacant", 409],
+    ["father admin actor required", "not_authorized", 403],
+    ["device not found", "device_not_found", 404],
+    ["provisioning intent is invalid or expired", "intent_failed", 400],
+    ["device changed since provisioning intent was issued", "intent_failed", 400],
+    ["provisioning credential mismatch", "intent_failed", 400],
+    ["unexpected database failure", "provisioning_failed", 400],
+  ] as const;
+  for (const [raw, expected, status] of cases) {
+    assertEquals(mapRpcError(new Error(raw)), expected);
+    configureTestEnvironment();
+    const handler = createProvisionHandler(dependencies({
+      createIntent: async () => { throw new Error(expected); },
+    }));
+    const response = await handler(request("POST", { operation: "rotate", device_id: DEVICE_ID }));
+    assertEquals(response.status, status);
+    assertEquals((await responseBody(response)).error, expected);
+  }
+});
+
+Deno.test("does not leak raw RPC errors or secrets", async () => {
   configureTestEnvironment();
   const original = console.error;
   const logs: string[] = [];

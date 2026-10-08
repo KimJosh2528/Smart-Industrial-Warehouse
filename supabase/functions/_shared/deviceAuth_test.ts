@@ -1,6 +1,8 @@
-import sodium from "npm:libsodium-wrappers@0.7.15";
+import sodiumModule from "npm:libsodium-wrappers@0.7.15";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { authenticateDeviceRequest, DeviceAuthError } from "./deviceAuth.ts";
+
+const sodium = sodiumModule as any;
 
 const testKeyHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const testSecret = "phase6-test-device-secret";
