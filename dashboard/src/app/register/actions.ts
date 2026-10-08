@@ -18,7 +18,7 @@ function classifySystemAdminApplicationError(error: { message?: string; code?: s
   if (message.includes("system_admin_application_invalid")) {
     return "Check that the Valid ID and Facebook links use the required HTTPS formats.";
   }
-  if (code === "42883" || message.includes("submit_system_admin_application") && message.includes("does not exist")) {
+  if (code === "42883" || code === "pgrst202" || message.includes("submit_system_admin_application") && message.includes("does not exist")) {
     return "System Admin registration is not configured on this environment yet. Please contact Father Admin.";
   }
   if (error.status === 0 || message.includes("fetch failed") || message.includes("network")) {
