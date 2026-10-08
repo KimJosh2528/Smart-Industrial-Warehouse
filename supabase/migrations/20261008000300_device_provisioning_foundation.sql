@@ -196,8 +196,8 @@ declare
   v_role text;
 begin
   v_role := coalesce(
-    current_setting('request.jwt.claim.role', true),
-    current_setting('request.jwt.claims', true)::jsonb ->> 'role'
+    nullif(current_setting('request.jwt.claim.role', true), ''),
+    nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role'
   );
 
   if v_role <> 'service_role' then
@@ -570,9 +570,7 @@ declare
   actor uuid := coalesce(p_actor_user_id, auth.uid());
   ev text;
 begin
-  if current_setting('request.jwt.claim.role', true) <> 'service_role' then
-    raise exception 'trusted provisioning service required';
-  end if;
+  perform private.require_device_provisioning_service();
 
   if actor is null or not exists (
     select 1 from public.profiles p
