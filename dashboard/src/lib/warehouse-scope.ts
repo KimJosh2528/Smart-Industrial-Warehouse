@@ -41,7 +41,10 @@ export async function getAuthorizedWarehouses(client: SupabaseClient): Promise<{
 export async function resolveAuthorizedWarehouseId(client: SupabaseClient, requestedWarehouseId: string | null): Promise<string | null> {
   const scope = await getAuthorizedWarehouses(client);
   if (scope.error) return null;
-  if (scope.role === "system_admin") return scope.warehouses.find(() => true)?.id ?? null;
+  if (scope.role === "system_admin") {
+    if (scope.warehouses.length !== 1) return null;
+    return scope.warehouses[0].id;
+  }
   if (scope.role === "father_admin" && requestedWarehouseId && scope.warehouses.some((warehouse) => warehouse.id === requestedWarehouseId)) {
     return requestedWarehouseId;
   }

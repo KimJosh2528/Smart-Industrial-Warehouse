@@ -1,3 +1,6 @@
+// Operator-only trusted provisioning CLI.
+// Run only in a protected server/operator environment; never expose this to browser clients.
+
 import sodium from "npm:libsodium-wrappers@0.7.15";
 
 function fail(message: string): never {

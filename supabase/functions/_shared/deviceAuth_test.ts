@@ -75,7 +75,9 @@ Deno.test("device authentication rejects missing, unknown, stale, modified, and 
     { "X-Timestamp": timestamp, "X-Signature": valid["X-Signature"] },
     { "X-Device-UID": testUid, "X-Signature": valid["X-Signature"] },
     { "X-Device-UID": testUid, "X-Timestamp": timestamp },
-  ]) await assertRejects(() => authenticateDeviceRequest(new Request("https://example.test", { headers }), body, base), DeviceAuthError);
+  ]) await assertRejects(() => authenticateDeviceRequest(new Request("https://example.test", {
+    headers: Object.fromEntries(Object.entries(headers).filter(([, value]) => value !== undefined)) as Record<string, string>,
+  }), body, base), DeviceAuthError);
   await assertRejects(() => authenticateDeviceRequest(new Request("https://example.test", { headers: { ...valid, "X-Device-UID": "unknown" } }), body, base), DeviceAuthError);
   await assertRejects(() => authenticateDeviceRequest(new Request("https://example.test", { headers: { ...valid, "X-Timestamp": "1699999000" } }), body, base), DeviceAuthError);
   let calls = 0;
