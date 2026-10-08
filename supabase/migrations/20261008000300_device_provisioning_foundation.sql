@@ -303,9 +303,9 @@ begin
     raise exception 'reassignment target must differ from current warehouse';
   end if;
 
-  token := encode(gen_random_bytes(32), 'hex');
-  token_hash := encode(digest(convert_to(token, 'utf8'), 'sha256'), 'hex');
-  secret_hash := encode(digest(convert_to(btrim(p_encrypted_secret), 'utf8'), 'sha256'), 'hex');
+  token := encode(extensions.gen_random_bytes(32), 'hex');
+  token_hash := encode(extensions.digest(convert_to(token, 'utf8'), 'sha256'), 'hex');
+  secret_hash := encode(extensions.digest(convert_to(btrim(p_encrypted_secret), 'utf8'), 'sha256'), 'hex');
 
   insert into private.device_provisioning_intents (
     intent_token_hash, encrypted_secret_hash, device_id, operation,
@@ -363,8 +363,8 @@ begin
     raise exception 'invalid encrypted device secret';
   end if;
 
-  token_hash := encode(digest(convert_to(p_intent_token, 'utf8'), 'sha256'), 'hex');
-  secret_hash := encode(digest(convert_to(btrim(p_encrypted_secret), 'utf8'), 'sha256'), 'hex');
+  token_hash := encode(extensions.digest(convert_to(p_intent_token, 'utf8'), 'sha256'), 'hex');
+  secret_hash := encode(extensions.digest(convert_to(btrim(p_encrypted_secret), 'utf8'), 'sha256'), 'hex');
 
   select * into i
   from private.device_provisioning_intents
@@ -594,6 +594,7 @@ begin
     or (d.lifecycle_status = 'active' and p_status = 'disabled')
     or (d.lifecycle_status = 'disabled' and p_status = 'active')
     or (d.lifecycle_status = 'active' and p_status = 'revoked')
+    or (d.lifecycle_status = 'reassignment_pending' and p_status = 'provisioned')
     or (d.lifecycle_status = 'revoked' and p_status = 'retired')
   ) then
     raise exception 'invalid device lifecycle transition';
