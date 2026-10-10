@@ -153,12 +153,16 @@ def norm(t):
 
 
 def load_plates():
+    global authorized_raw
     d = {}
+    authorized_raw = {}
     with open(PLATES_FILE, encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 plate, _, label = line.strip().partition(",")
-                d[norm(plate)] = label or plate
+                key = norm(plate)
+                d[key] = label or plate
+                authorized_raw[key] = plate.strip()
     return d
 
 
@@ -538,7 +542,13 @@ def verify_plate():
                 break
         for label, v in votes.items():
             if v >= PLATE_NEED:
-                last_detection.update(observed=k, score=max((c for t, c in all_good if norm(t) == k), default=None))
+                # The local matcher folds ambiguous OCR characters (for
+                # example Q -> 0), but the cloud bridge must receive the
+                # registered plate identity from plates.txt.
+                last_detection.update(
+                    observed=authorized_raw.get(k, k),
+                    score=max((c for t, c in all_good if norm(t) == k), default=None),
+                )
                 print(f"[PLATE] matched {label} ({v} frame)")
                 return f"OK {label}"
 

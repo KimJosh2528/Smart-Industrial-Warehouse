@@ -186,7 +186,7 @@ Deno.serve(async (req) => {
       "trucks",
       {
         warehouse_id: `eq.${auth.device.warehouse_id}`,
-        normalized_plate: `eq.${candidate.normalized}`,
+        normalized_plate: `ilike.${candidate.normalized}`,
         is_active: "eq.true",
       },
       "id,normalized_plate,is_active",
