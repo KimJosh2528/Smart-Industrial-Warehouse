@@ -56,14 +56,17 @@ export async function finalizeMemberApplication(formData: FormData) {
 export async function finalizeDriverApplication(formData: FormData) {
   const applicationId = String(formData.get("applicationId") ?? "");
   const truckId = String(formData.get("truckId") ?? "");
-  if (!applicationId || !truckId) redirect("/member-applications?application=error");
+  if (!applicationId || !truckId) redirect("/member-applications?tab=drivers&driver=missing-truck");
   const client = await createClient();
   const { error } = await client.rpc("finalize_driver_application", {
     p_application_id: applicationId,
     p_truck_id: truckId,
   });
-  if (error) redirect("/member-applications?application=error");
+  if (error?.message.includes("truck_not_available_for_assignment")) {
+    redirect("/member-applications?tab=drivers&driver=truck-unavailable");
+  }
+  if (error) redirect("/member-applications?tab=drivers&driver=error");
   revalidatePath("/member-applications");
   revalidatePath("/fleet");
-  redirect("/member-applications?application=saved");
+  redirect("/member-applications?tab=drivers&driver=saved");
 }

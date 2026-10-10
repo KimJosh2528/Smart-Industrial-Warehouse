@@ -52,6 +52,8 @@ export default async function MemberApplicationsPage({ searchParams }: { searchP
   const rfids = (vacantRfids ?? []) as VacantRfid[];
   const registeredTrucks = (registeredTruckRows ?? []) as RegisteredTruck[];
   const accessStatus = one(params.access);
+  const applicationStatus = one(params.application);
+  const driverStatus = one(params.driver);
 
   return <section className="mx-auto max-w-7xl">
     <p className="text-xs font-medium uppercase tracking-[0.2em] text-cyan-300/80">Warehouse Management</p>
@@ -59,8 +61,12 @@ export default async function MemberApplicationsPage({ searchParams }: { searchP
     <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">Review each applicant type in its own workspace. Doorlock permissions are limited to entrance areas.</p>
     {accessStatus === "saved" && <p className="mt-5 rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200">Access review saved successfully.</p>}
     {accessStatus === "error" && <p className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">Access review could not be saved. Check the selected entrance area and guard placement.</p>}
-    {one(params.application) === "saved" && <p className="mt-5 rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200">Application approved. RFID and access permissions were saved.</p>}
-    {one(params.application) === "error" && <p className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">Application could not be approved. Choose a vacant RFID and valid entrance permission.</p>}
+    {tab === "staff" && applicationStatus === "saved" && <p className="mt-5 rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200">Staff application approved. RFID and entrance permission were saved.</p>}
+    {tab === "staff" && applicationStatus === "error" && <p className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">Staff application could not be approved. Choose a vacant staff RFID and valid staff entrance permission.</p>}
+    {tab === "drivers" && driverStatus === "saved" && <p className="mt-5 rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200">Driver application approved. The registered truck was assigned. No RFID or permission area is required.</p>}
+    {tab === "drivers" && driverStatus === "missing-truck" && <p className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">Select a registered truck before approving this driver. No RFID or permission area is required.</p>}
+    {tab === "drivers" && driverStatus === "truck-unavailable" && <p className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">That truck is no longer available. Choose an active registered truck with no driver assigned.</p>}
+    {tab === "drivers" && driverStatus === "error" && <p className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">Driver application could not be approved. Check the registered truck assignment. No RFID or permission area is required.</p>}
     {one(params.rfid) === "saved" && <p className="mt-5 rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200">RFID reserved for this application.</p>}
     {one(params.rfid) === "error" && <p className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">RFID could not be assigned. Choose a vacant UID.</p>}
     {error && <p className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">Member applications could not be loaded.</p>}
@@ -85,7 +91,7 @@ function GuardTable({ applications, areas, rfids }: { applications: Application[
 }
 
 function DriverTable({ applications, trucks }: { applications: Application[]; trucks: RegisteredTruck[] }) {
-  return <ApplicationTable title="Driver requests" description="Assign an existing registered truck. Truck name, plate, placement, and RFID are managed in the Trucks workspace." applications={applications} headers={["Applicant", "Application", "Assign registered truck", "Documents", "Submitted"]} renderCells={(application) => <><ApplicantCell application={application} /><ApplicationCell application={application} /><td className="px-5 py-4"><DriverFinalizeForm application={application} trucks={trucks} /></td><DocumentCell application={application} /><SubmittedCell application={application} /></>} />;
+  return <ApplicationTable title="Driver requests" description="Assign an existing registered truck. Driver access uses the truck plate only; no RFID or permission area is required." applications={applications} headers={["Applicant", "Application", "Assign registered truck", "Documents", "Submitted"]} renderCells={(application) => <><ApplicantCell application={application} /><ApplicationCell application={application} /><td className="px-5 py-4"><DriverFinalizeForm application={application} trucks={trucks} /></td><DocumentCell application={application} /><SubmittedCell application={application} /></>} />;
 }
 
 function ApplicationTable({ title, description, applications, headers, renderCells }: { title: string; description: string; applications: Application[]; headers: string[]; renderCells: (application: Application) => React.ReactNode }) {
