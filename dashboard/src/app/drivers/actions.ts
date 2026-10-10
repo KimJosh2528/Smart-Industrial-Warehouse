@@ -149,7 +149,7 @@ export async function invokeDriverAccountRequest(
     }
   }
   revalidatePath("/drivers");
-  return { success: true, message: `Account request created.${syncWarning}`, registrationLink: `${registrationOrigin()}/register/driver/${result.raw_token}`, expiresAt: result.expires_at };
+  return { success: true, message: `Account request created. Use only this newest link; older driver links are revoked.${syncWarning}`, registrationLink: `${registrationOrigin()}/register/driver/${result.raw_token}`, expiresAt: result.expires_at };
 }
 
 function claimRequestError(message: string) {
