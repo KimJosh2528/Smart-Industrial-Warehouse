@@ -90,7 +90,7 @@ Deno.serve(async (req) => {
       return jsonResponse({ status: "denied", reason: "plate_or_area_invalid" }, 200);
     }
     const trucks = await selectRows<TruckRow>("trucks", {
-      warehouse_id: `eq.${auth.device.warehouse_id}`, normalized_plate: `eq.${normalized}`, is_active: "eq.true",
+      warehouse_id: `eq.${auth.device.warehouse_id}`, normalized_plate: `ilike.${normalized}`, is_active: "eq.true",
     }, "id,normalized_plate,is_active");
     const truck = trucks.length === 1 ? trucks[0] : null;
     if (!truck) {
