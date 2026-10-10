@@ -10,7 +10,9 @@ export default async function DriverRegistrationPage({ params }: { params: Promi
   const client = await createClient();
   const { data, error } = await client.rpc("get_account_claim", { p_token_hash: hashClaimToken(token) });
   const claim = data?.[0];
-  if (error || !claim || claim.claim_kind !== "driver") notFound();
+  if (error || !claim || claim.claim_kind !== "driver") {
+    return <main className="flex min-h-screen items-center justify-center bg-[#061223] px-5 text-slate-100"><section className="w-full max-w-md rounded-2xl border border-rose-400/20 bg-[#0b1d34] p-6 shadow-2xl"><p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-300/80">WareGuard</p><h1 className="mt-2 text-2xl font-semibold text-white">Registration link is no longer active</h1><p className="mt-3 text-sm leading-6 text-slate-400">This driver registration link may have been replaced, revoked, expired, or already used. Ask the System Admin to send a new magic link, then open only the newest link.</p><a href="/login" className="mt-6 inline-flex rounded-lg bg-cyan-400 px-4 py-2.5 text-sm font-semibold text-slate-950">Back to sign in</a></section></main>;
+  }
 
   return <main className="flex min-h-screen items-center justify-center bg-[#061223] px-5 text-slate-100"><section className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0b1d34] p-6 shadow-2xl"><p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-300/80">WareGuard</p><h1 className="mt-2 text-2xl font-semibold text-white">Driver account registration</h1><p className="mt-2 text-sm text-slate-400">Create the personal account for <span className="text-slate-200">{claim.display_name}</span> in <span className="text-slate-200">{claim.warehouse_name}</span>.</p>{claim.truck_plate_number && <p className="mt-2 text-xs text-slate-500">Current truck assignment: {claim.truck_plate_number}{claim.truck_division ? ` · ${claim.truck_division}` : ""}</p>}<div className="mt-6"><AccountRegistrationForm token={token} kind="driver" /></div></section></main>;
 }
