@@ -3,11 +3,11 @@ WareGuard cloud test client (Day 1)
 Sends SIGNED requests to the Supabase Edge Functions, the same way the device would.
 
 Set these in PowerShell first. The device secret stays on your laptop, never paste it in chat.
-  $env:WG_FUNCTIONS_URL = "https://odavmzgciaoahebanpmy.supabase.co/functions/v1"
+  $env:WG_FUNCTIONS_URL = "https://hxqevjiymnuiluszejpj.supabase.co/functions/v1"
   $env:WG_DEVICE_UID    = "esp32cam-truck-plate-01"
-  $env:WG_DEVICE_SECRET = "e3e46e7ea4d65f854e795bf93df1f510baab08c1e4f8bf6457c0de3cdeacf764"
+  $env:WG_DEVICE_SECRET = "<secret returned by Device Inventory provisioning>"
   $env:WG_STAFF_AREA    = "95834a46-908a-40cf-b0d1-28f67c3e9d1d"
-  $env:WG_TRUCK_AREA    = "98284669-4a97-4449-9287-0e1f95205147"
+  $env:WG_TRUCK_AREA    = "84d9ef5b-d29f-40dd-9dec-a277753286f3"
   optional: $env:WG_ANON_KEY = "<anon key>"     # only if the gateway answers "Invalid JWT"
 
 Usage:

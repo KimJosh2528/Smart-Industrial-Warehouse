@@ -12,6 +12,11 @@
 #include "ca_cert.h"
 
 static SemaphoreHandle_t wgTsMutex = NULL;
+static SemaphoreHandle_t wgAccessMutex = NULL;
+static bool wgAccessPending = false;
+static String wgPendingAreaId;
+static String wgPendingCredentialType;
+static String wgPendingCredentialHash;
 
 String hmacHex(const String &key, const String &msg) {
   uint8_t out[32];
@@ -90,6 +95,41 @@ static bool wgPostSigned(const char *path, const String &body) {
   return code >= 200 && code < 300;
 }
 
+// Authorize before opening the physical gate. This intentionally fails closed
+// when Wi-Fi/cloud is unavailable or the area permission is missing.
+bool wgAuthorizeAccess(const String& areaId, const String& credentialType, const String& credentialHash) {
+  if (areaId.length() == 0 || credentialHash.length() != 64 || !timeOk()) return false;
+
+  const String body = String("{\"area_id\":\"") + areaId +
+                      "\",\"credential_type\":\"" + credentialType +
+                      "\",\"credential_hash\":\"" + credentialHash + "\"}";
+  String tsStr = String(wgNextTimestamp());
+  String sig = hmacHex(DEVICE_SECRET, tsStr + "." + body);
+
+  WiFiClientSecure client;
+  client.setCACert(SUPABASE_CA);
+
+  HTTPClient http;
+  http.begin(client, String(FUNCTIONS_URL) + "/access-event");
+  http.setConnectTimeout(5000);
+  http.setTimeout(10000);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("X-Device-UID", DEVICE_UID);
+  http.addHeader("X-Timestamp", tsStr);
+  http.addHeader("X-Signature", sig);
+  http.addHeader("apikey", ANON_KEY);
+  http.addHeader("Authorization", String("Bearer ") + ANON_KEY);
+
+  const int code = http.POST(body);
+  const String response = code > 0 ? http.getString() : String();
+  http.end();
+
+  const bool authorized = code >= 200 && code < 300 && response.indexOf("\"status\":\"authorized\"") >= 0;
+  Serial.printf("[ACCESS] cloud %s (HTTP %d)\n", authorized ? "AUTHORIZED" : "DENIED", code);
+  if (!authorized && response.length() > 0) Serial.println(String("[ACCESS] ") + response);
+  return authorized;
+}
+
 static void wgSendHeartbeat() {
   String body = String("{\"uptime_s\":") + (millis() / 1000) +
                 ",\"rssi\":" + WiFi.RSSI() + ",\"fw\":\"main-s4a\"}";
@@ -101,10 +141,40 @@ static void wgSendSensorReading() {
     Serial.println("[NET] sensor-reading skipped: DHT invalid");
     return;
   }
-  String body = String("{\"temperature_c\":") + String(currentTemperature, 1) +
+  if (String(SENSOR_AREA_ID).length() == 0) {
+    Serial.println("[NET] sensor-reading skipped: SENSOR_AREA_ID is not configured");
+    return;
+  }
+  String body = String("{\"area_id\":\"") + SENSOR_AREA_ID +
+                String("\",\"temperature_c\":") + String(currentTemperature, 1) +
                 ",\"humidity_pct\":" + String(currentHumidity, 1) +
                 ",\"smoke_value\":" + String(smokeValue10) + "}";
   wgPostSigned("/sensor-reading", body);
+}
+
+void wgQueueAccessEvent(const String& areaId, const String& credentialType, const String& credentialHash) {
+  if (areaId.length() == 0 || credentialHash.length() != 64 || wgAccessMutex == NULL) return;
+  xSemaphoreTake(wgAccessMutex, portMAX_DELAY);
+  wgPendingAreaId = areaId;
+  wgPendingCredentialType = credentialType;
+  wgPendingCredentialHash = credentialHash;
+  wgAccessPending = true;
+  xSemaphoreGive(wgAccessMutex);
+}
+
+static bool wgTakeAccessEvent(String& areaId, String& credentialType, String& credentialHash) {
+  if (wgAccessMutex == NULL) return false;
+  xSemaphoreTake(wgAccessMutex, portMAX_DELAY);
+  if (!wgAccessPending) {
+    xSemaphoreGive(wgAccessMutex);
+    return false;
+  }
+  areaId = wgPendingAreaId;
+  credentialType = wgPendingCredentialType;
+  credentialHash = wgPendingCredentialHash;
+  wgAccessPending = false;
+  xSemaphoreGive(wgAccessMutex);
+  return true;
 }
 
 // The network task. Lives on core 0, created once in netBegin().
@@ -114,10 +184,21 @@ static void netTask(void *arg) {
   for (;;) {
     wgEnsureNetwork();
     if (WiFi.status() == WL_CONNECTED && timeOk() && verifyState == V_IDLE) {
+      String areaId, credentialType, credentialHash;
+      if (wgTakeAccessEvent(areaId, credentialType, credentialHash)) {
+        String body = String("{\"area_id\":\"") + areaId +
+                      "\",\"credential_type\":\"" + credentialType +
+                      "\",\"credential_hash\":\"" + credentialHash + "\"}";
+        wgPostSigned("/access-event", body);
+      }
+      // Heartbeats and sensor readings have independent schedules. Keeping
+      // sensor upload in an `else if` made it wait behind the heartbeat and
+      // effectively reduced updates to roughly once every 20 seconds.
       if (millis() - lastHb >= 15000) {
         lastHb = millis();
         wgSendHeartbeat();
-      } else if (millis() - lastSensor >= 10000) {
+      }
+      if (millis() - lastSensor >= 2000) {
         lastSensor = millis();
         wgSendSensorReading();
       }
@@ -128,6 +209,7 @@ static void netTask(void *arg) {
 
 void netBegin() {
   wgTsMutex = xSemaphoreCreateMutex();
+  wgAccessMutex = xSemaphoreCreateMutex();
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASS);                 // does not wait, setup() continues

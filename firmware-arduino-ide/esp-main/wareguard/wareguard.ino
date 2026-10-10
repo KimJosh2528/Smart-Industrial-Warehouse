@@ -1,6 +1,8 @@
 #include <Wire.h>
 #include <SPI.h>
 #include <MFRC522.h>
+#include "mbedtls/md.h"
+#include "secrets.h"
 
 // =====================================================
 // PIN CONFIGURATION
@@ -57,8 +59,13 @@ MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN);
 // AUTHORIZED RFID UID
 // =====================================================
 
-byte authorizedUID[] = { 0x8B, 0xD6, 0xF1, 0xCA };
+// Keep the demo card authorized and also allow the registered guard tag.
+// UIDs are stored as bytes because that is what MFRC522 returns.
+const byte authorizedUIDs[][4] = {
+  { 0xB0, 0x88, 0xC4, 0x5C }  // Kim Joshua guard tag (b088c45c)
+};
 const byte AUTHORIZED_UID_SIZE = 4;
+const byte AUTHORIZED_UID_COUNT = sizeof(authorizedUIDs) / sizeof(authorizedUIDs[0]);
 
 
 // =====================================================
@@ -70,11 +77,11 @@ const byte AUTHORIZED_UID_SIZE = 4;
 const bool SMOKE_RISES_WITH_GAS = true;
 
 // Levels use the 0-1023 scale (raw ESP32 reading / 4)
-#define SMOKE_NORMAL  0     // below 400
-#define SMOKE_WARNING 1     // 400 to 599
-#define SMOKE_DANGER  2     // 600 and above
-const int  SMOKE_WARN_LEVEL   = 400;  
-const int  SMOKE_DANGER_LEVEL = 600;
+#define SMOKE_NORMAL  0     // below 450
+#define SMOKE_WARNING 1     // 450 to 649
+#define SMOKE_DANGER  2     // 650 and above
+const int  SMOKE_WARN_LEVEL   = 450;
+const int  SMOKE_DANGER_LEVEL = 650;
 const int  SMOKE_HYST         = 10;    // must fall this far below a level to leave it
 
 const unsigned long SMOKE_WARMUP_MS = 30000UL;
@@ -102,13 +109,13 @@ bool smokeNoisy = false;
 // =====================================================
 
 const float TEMP_WARN_C        = 35.0;
-const float TEMP_FIRE_C        = 45.0;
+const float TEMP_FIRE_C        = 35.0;
 const float TEMP_CLEAR_HYST_C  = 5.0;
 const float HUM_WARN_PCT       = 80.0;
 
 const unsigned long TEMP_RISE_WINDOW_MS = 30000UL;
 const float TEMP_RISE_C                 = 5.0;
-const unsigned long SMOKE_ESCALATE_MS   = 60000UL;
+const unsigned long SMOKE_ESCALATE_MS   = 40000UL;
 
 bool fireAlarm = false;
 bool tempRisingFast = false;
@@ -220,12 +227,10 @@ float currentHumidity = 0.0;
 bool dhtValid = false;
 byte dhtFailCount = 0;
 const byte DHT_MAX_FAILS = 3;
+portMUX_TYPE dhtMux = portMUX_INITIALIZER_UNLOCKED;
 
 int currentSmokeValue = 0;
 bool smokeDetected = false;      // true only at DANGER level
-
-portMUX_TYPE dhtMux = portMUX_INITIALIZER_UNLOCKED;
-
 
 // =====================================================
 // LCD STATE (own PCF8574 driver, no library needed)
@@ -269,6 +274,7 @@ bool lcdFindAddress();
 void scanI2CBus();
 void checkRFID();
 bool isAuthorizedCard();
+String currentRfidCredentialHash();
 void accessGranted();
 void accessDenied();
 void updateButtons();
@@ -278,10 +284,12 @@ void truckExitPressed();                      // NEW
 void truckAccessGranted();                    // NEW
 void updateTruckGate();                       // NEW
 void handleSerialLine(const char *raw);       // NEW
+bool wgAuthorizeAccess(const String& areaId, const String& credentialType, const String& credentialHash);
 
 // Functions that live in camera_verify.ino (declared here so this tab always sees them)
 void camVerifyBegin();
 void camVerifyUpdate();
+void wgQueueAccessEvent(const String& areaId, const String& credentialType, const String& credentialHash);
 
 // NEW: one switch point for "which gate gets opened"
 #define GATE_STAFF  0
@@ -293,6 +301,12 @@ void grantGate(byte gate);
 // The fire exit button always works, whatever the mode.
 byte activeGate = GATE_STAFF;
 void setMode(byte gate);
+const char *activeRfidAreaId = DEMO_GATE_AREA_ID;
+// RFID area selection is independent from the camera/authentication mode.
+// The camera may be in TRUCK mode while the physical RFID reader is testing
+// a staff entrance, so never use activeGate for RFID authorization.
+byte activeRfidGate = GATE_STAFF;
+void setRfidArea(const char *areaId, const char *label);
 
 
 // =====================================================
@@ -306,6 +320,7 @@ void setup() {
 
   Serial.println("\n==========================================");
   Serial.println("WAREGUARD SYSTEM STARTING");
+  Serial.println("[FW] ESP-MAIN DHT11-HEAD-REVERT");
   Serial.println("==========================================");
 
   analogReadResolution(12);
@@ -365,7 +380,7 @@ void setup() {
 
   Serial.println("==========================================");
   Serial.println("SYSTEM READY");
-  Serial.println("Type + Enter:  auth | staff auth | truck auth | r   (mode is set on the /live page)");
+  Serial.println("Type + Enter:  RFID STAFF | RFID ELECTRONIC | auth | staff auth | truck auth | r");
   Serial.println("==========================================");
 }
 
@@ -539,7 +554,6 @@ bool readDHT11Sensor() {
   bool ok = dhtTimed(data);
   portEXIT_CRITICAL(&dhtMux);
   if (!ok) return false;
-
   byte checksum = data[0] + data[1] + data[2] + data[3];
   if (checksum != data[4]) return false;
 
@@ -709,9 +723,12 @@ void checkSmokeSensor() {
 // =====================================================
 
 void updateSafetyState() {
+  const bool fireAlarmBefore = fireAlarm;
   bool tempHigh     = dhtValid && (currentTemperature >= TEMP_FIRE_C);
   bool smokeTooLong = smokeDetected && ((millis() - smokeStartTime) >= SMOKE_ESCALATE_MS);
-  bool fireCondition = smokeDetected && (tempHigh || tempRisingFast || smokeTooLong);
+  // A rapid temperature rise is independently dangerous; sustained/high smoke
+  // still requires the smoke signal so a brief MQ-2 spike does not alarm.
+  bool fireCondition = tempRisingFast || (smokeDetected && (tempHigh || smokeTooLong));
 
   if (!fireAlarm) {
     if (fireCondition) {
@@ -729,7 +746,10 @@ void updateSafetyState() {
       exitAlarmBlinkTime = millis();
       digitalWrite(EXIT_RED_LED_PIN, HIGH);
       digitalWrite(EXIT_BUZZER, HIGH);
-      Serial.println("[FIRE] ALARM ON");
+      if (tempHigh && smokeDetected) Serial.println("[FIRE] ALARM ON: high temperature + high smoke");
+      else if (smokeTooLong) Serial.println("[FIRE] ALARM ON: long smoke exposure");
+      else if (tempRisingFast) Serial.println("[FIRE] ALARM ON: sudden high temperature");
+      else Serial.println("[FIRE] ALARM ON");
     }
   } else {
     bool tempStillHot = dhtValid && (currentTemperature >= (TEMP_FIRE_C - TEMP_CLEAR_HYST_C));
@@ -747,6 +767,10 @@ void updateSafetyState() {
       Serial.println("[FIRE] ALARM CLEARED");
     }
   }
+
+  // Switch the LCD immediately when the alarm turns on/off instead of waiting
+  // for the regular environmental refresh interval.
+  if (fireAlarm != fireAlarmBefore) updateLCD();
 
   static unsigned long lastSafetyPrint = 0;
   if (millis() - lastSafetyPrint >= 1000) {
@@ -911,7 +935,8 @@ void showLCDStatus(const char *line1, const char *line2) {
   snprintf(statusL1, sizeof(statusL1), "%s", line1);
   snprintf(statusL2, sizeof(statusL2), "%s", line2);
   statusUntil = millis() + LCD_STATUS_TIME;
-  lcdWrite(statusL1, statusL2);
+  // The LCD is reserved for the environmental monitor.  Access/mode status
+  // remains available in Serial output and must not replace the sensor view.
 }
 
 void updateLCD() {
@@ -948,39 +973,18 @@ void updateLCD() {
     return;
   }
 
-  if (statusUntil != 0) {
-    if ((long)(statusUntil - now) > 0) {
-      lcdWrite(statusL1, statusL2);
-      return;
-    }
-    statusUntil = 0;
+  // Normal LCD view: environmental readings only.  Fire alarm has priority
+  // above and replaces this view with the evacuation message.
+  if (dhtValid) {
+    snprintf(a, sizeof(a), "T:%dC H:%d%%",
+             (int)currentTemperature, (int)currentHumidity);
+  } else {
+    snprintf(a, sizeof(a), "T:ERR H:ERR");
   }
 
-  if (smokeLevel >= SMOKE_WARNING) {
-    snprintf(b, sizeof(b), "Gas:%d", smokeValue10);
-    lcdWrite(smokeLevel == SMOKE_DANGER ? "SMOKE DANGER!" : "SMOKE WARNING", b);
-    return;
-  }
-
-  if (!dhtValid) {
-    lcdWrite("Temp: ERROR", "Check DHT11");
-    return;
-  }
-
-  if (currentTemperature >= TEMP_WARN_C) {
-    snprintf(b, sizeof(b), "Temp: %d C", (int)currentTemperature);
-    lcdWrite("HIGH TEMP WARN!", b);
-    return;
-  }
-
-  if (currentHumidity >= HUM_WARN_PCT) {
-    snprintf(b, sizeof(b), "Hum : %d %%", (int)currentHumidity);
-    lcdWrite("HIGH HUMIDITY!", b);
-    return;
-  }
-
-  snprintf(a, sizeof(a), "Temp: %d C", (int)currentTemperature);
-  snprintf(b, sizeof(b), "Hum : %d %%", (int)currentHumidity);
+  const char *smokeState = smokeLevel == SMOKE_DANGER ? "DANGER" :
+                           smokeLevel == SMOKE_WARNING ? "WARN" : "NORMAL";
+  snprintf(b, sizeof(b), "Gas:%d %s", smokeValue10, smokeState);
   lcdWrite(a, b);
 }
 
@@ -997,19 +1001,68 @@ void checkRFID() {
   for (byte i = 0; i < rfid.uid.size; i++) Serial.printf(" %02X", rfid.uid.uidByte[i]);
   Serial.println();
 
-  if (isAuthorizedCard()) grantGate(activeGate);   // CHANGED: opens the gate chosen by the mode (default STAFF = same as before)
+  const bool knownLocalUid = isAuthorizedCard();
+  const String areaId = String(activeRfidAreaId);
+  const String credentialHash = currentRfidCredentialHash();
+  const bool permittedByCloud = areaId.length() > 0 &&
+    wgAuthorizeAccess(areaId, "staff_rfid", credentialHash);
+  const bool staffRfidMode = activeRfidGate == GATE_STAFF;
+
+  // Fail closed: the UID must be known locally AND the cloud must confirm
+  // the credential is active and permitted for this exact area. A staff or
+  // guard RFID can never open the truck gate.
+  if (staffRfidMode && knownLocalUid && permittedByCloud) grantGate(GATE_STAFF);
   else accessDenied();
 
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
 }
 
+String currentRfidCredentialHash() {
+  String canonical;
+  canonical.reserve(rfid.uid.size * 2);
+  for (byte i = 0; i < rfid.uid.size; i++) {
+    char byteHex[3];
+    snprintf(byteHex, sizeof(byteHex), "%02x", rfid.uid.uidByte[i]);
+    canonical += byteHex;
+  }
+
+  unsigned char digest[32];
+  mbedtls_md_context_t context;
+  mbedtls_md_init(&context);
+  const mbedtls_md_info_t* info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+  if (!info || mbedtls_md_setup(&context, info, 0) != 0 ||
+      mbedtls_md_starts(&context) != 0 ||
+      mbedtls_md_update(&context, reinterpret_cast<const unsigned char*>(canonical.c_str()), canonical.length()) != 0 ||
+      mbedtls_md_finish(&context, digest) != 0) {
+    mbedtls_md_free(&context);
+    return "";
+  }
+  mbedtls_md_free(&context);
+
+  String hash;
+  hash.reserve(64);
+  for (byte i = 0; i < sizeof(digest); i++) {
+    char byteHex[3];
+    snprintf(byteHex, sizeof(byteHex), "%02x", digest[i]);
+    hash += byteHex;
+  }
+  return hash;
+}
+
 bool isAuthorizedCard() {
   if (rfid.uid.size != AUTHORIZED_UID_SIZE) return false;
-  for (byte i = 0; i < AUTHORIZED_UID_SIZE; i++) {
-    if (rfid.uid.uidByte[i] != authorizedUID[i]) return false;
+  for (byte candidate = 0; candidate < AUTHORIZED_UID_COUNT; candidate++) {
+    bool matches = true;
+    for (byte i = 0; i < AUTHORIZED_UID_SIZE; i++) {
+      if (rfid.uid.uidByte[i] != authorizedUIDs[candidate][i]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return true;
   }
-  return true;
+  return false;
 }
 
 void accessGranted() {
@@ -1045,19 +1098,13 @@ void accessDenied() {
 // EXIT BUTTONS
 // =====================================================
 
-// Staff exit push button: opens ONLY the door servo for 5 s.
-// CHANGED: only works while STAFF mode is active.
+// Staff exit push button: opens ONLY the staff door servo for 5 s.
+// This physical exit is independent of the selected RFID/camera mode.
 void staffExitPressed() {
   Serial.println("[BTN] Staff exit pressed");
 
   if (fireAlarm) {
     showLCDStatus("FIRE! EVACUATE", "DOORS OPEN");
-    return;
-  }
-
-  if (activeGate != GATE_STAFF) {                          // NEW
-    Serial.println("[BTN] Ignored - TRUCK mode is active");
-    showLCDStatus("MODE: TRUCK", "STAFF EXIT OFF");
     return;
   }
 
@@ -1168,6 +1215,10 @@ void handleSerialLine(const char *raw) {
 
   if (s == "R") {
     resetBaseline();
+  } else if (s == "RFID STAFF") {
+    setRfidArea(DEMO_GATE_AREA_ID, "STAFF MAIN ENTRANCE");
+  } else if (s == "RFID ELECTRONIC") {
+    setRfidArea(DEMO_ELECTRONIC_AREA_ID, "ELECTRONIC SUPPLY ENTRANCE");
   } else if (s == "STAFF AUTH") {
     Serial.println("[CMD] staff auth");
     grantGate(GATE_STAFF);
@@ -1192,6 +1243,13 @@ void setMode(byte gate) {
     Serial.println("[MODE] STAFF - RFID, 'auth' and the staff exit button open the staff door");
     showLCDStatus("MODE: STAFF", "RFID+EXIT=DOOR");
   }
+}
+
+void setRfidArea(const char *areaId, const char *label) {
+  activeRfidAreaId = areaId;
+  activeRfidGate = GATE_STAFF;
+  Serial.println(String("[RFID AREA] ") + label);
+  showLCDStatus("RFID AREA", label);
 }
 
 // The switch: pick a gate, and that gate's own open/close logic runs.

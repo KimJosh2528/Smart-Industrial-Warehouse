@@ -47,3 +47,6 @@ camera-server/last_face.jpg
 camera-server/last_plate.jpg
 
 
+
+.vercel
+.env*

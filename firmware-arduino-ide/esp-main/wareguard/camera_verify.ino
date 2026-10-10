@@ -3,9 +3,8 @@
 //
 // D35 button -> WareGuard asks the laptop (wareguard_server.py) -> laptop grabs a
 // picture from the ESP32-CAM and checks it -> WareGuard opens the gate or denies.
-//   STAFF mode : D35 = FACE check  -> opens the staff door
-//   TRUCK mode : D35 = PLATE check -> opens the truck gate
-// The mode is set on the server's /live page; this ESP32 follows it.
+//   D35 = PLATE check -> opens the truck gate
+// The simplified demo has one camera function: truck plate authentication.
 // =====================================================
 #include <WiFi.h>
 #include <HTTPClient.h>
@@ -64,13 +63,14 @@ void modeTask(void *arg) {
 void verifyTask(void *arg) {
   {
     String url = String("http://") + VERIFY_HOST + ":" + String(VERIFY_PORT) +
-                 "/verify?type=auto";
+                 "/verify?type=plate";
     String reply = "ERR no_server";
     {
       HTTPClient http;
       http.setConnectTimeout(3000);
       http.setTimeout(20000);
       if (http.begin(url)) {
+        http.addHeader("X-WareGuard-Trigger", "esp-button");
         int code = http.GET();
         if (code == 200) {
           reply = http.getString();
@@ -110,7 +110,7 @@ void camButtonPressed() {
     return;
   }
 
-  verifyGateSel = activeGate;               // STAFF = face, TRUCK = plate
+  verifyGateSel = GATE_TRUCK;               // camera is plate-only in this demo
   verifyState = V_RUNNING;
   if (xTaskCreatePinnedToCore(verifyTask, "verify", 8192, NULL, 1, NULL, 0) != pdPASS) {
     verifyState = V_IDLE;
@@ -175,7 +175,7 @@ void camVerifyUpdate() {
                   (unsigned)ESP.getFreeHeap(), (int)serverMode, digitalRead(CAM_BTN_PIN));
   }
 
-  // Steady-press filter (original logic)
+  // Steady-press filter. GPIO35 must have an external 10k pull-up.
   bool raw = (digitalRead(CAM_BTN_PIN) == LOW);
   if (raw != lastRaw) {
     lastRaw = raw;
@@ -184,7 +184,8 @@ void camVerifyUpdate() {
   unsigned long held = now - rawSince;
 
   if (!raw) {
-    armed = true;                            // any HIGH reading: ready for a new press
+    if (!armed) Serial.println("[CAMV] button armed; waiting for LOW press");
+    armed = true;                            // original working behavior: any HIGH arms it
   }
   if (raw && armed && held >= CAM_PRESS_MS) {
     armed = false;                           // count this press once

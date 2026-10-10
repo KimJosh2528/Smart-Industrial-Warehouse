@@ -70,6 +70,21 @@ export async function createStaff(_previous: CreateStaffState = createStaffIniti
   return { success: true, message: "Staff member created as unclaimed." };
 }
 
+export async function createGuard(_previous: CreateStaffState = createStaffInitial, formData: FormData): Promise<CreateStaffState> {
+  const warehouseId = String(formData.get("warehouseId") ?? "");
+  const displayName = String(formData.get("displayName") ?? "");
+  const employeeCode = String(formData.get("employeeCode") ?? "");
+  const isActive = formData.get("isActive") === "on";
+  if (!warehouseId || !displayName.trim()) return { ...createStaffInitial, message: "Enter a guard display name." };
+  const client = await createClient();
+  const authorizedWarehouseId = await resolveAuthorizedWarehouseId(client, warehouseId);
+  if (!authorizedWarehouseId) return { ...createStaffInitial, message: "You are not authorized to create a guard in that warehouse." };
+  const { error } = await client.rpc("create_guard", { p_warehouse_id: authorizedWarehouseId, p_display_name: displayName, p_employee_code: employeeCode || null, p_is_active: isActive });
+  if (error) return { ...createStaffInitial, message: error.message.includes("duplicate") ? "That guard code is already used in this warehouse." : "The guard could not be created." };
+  revalidatePath("/guards");
+  return { success: true, message: "Guard created as unclaimed." };
+}
+
 export async function manageStaffCredential(
   _previous: CredentialMutationState = initial,
   formData: FormData,
@@ -236,6 +251,24 @@ export async function revokeStaffAreaPermission(
   return { success: true, message: "Area permission revoked." };
 }
 
+export type StaffPermissionSaveState = { success: boolean; message: string };
+
+export async function saveStaffAreaPermissions(
+  _previous: StaffPermissionSaveState = { success: false, message: "" },
+  formData: FormData,
+): Promise<StaffPermissionSaveState> {
+  const staffMemberId = String(formData.get("staffMemberId") ?? "");
+  const areaIds = formData.getAll("areaIds").map(String).filter(Boolean);
+  if (!staffMemberId) return { success: false, message: "The permission request was invalid." };
+  const client = await createClient();
+  const { data: authData } = await client.auth.getUser();
+  if (!authData.user) return { success: false, message: "You must be signed in to manage permissions." };
+  const { error } = await client.rpc("save_staff_area_permissions", { p_staff_member_id: staffMemberId, p_area_ids: areaIds });
+  if (error) return { success: false, message: "The doorlock permissions could not be saved." };
+  revalidatePath("/staff");
+  return { success: true, message: "Doorlock permissions saved." };
+}
+
 export async function invokeStaffAccountRequest(
   _previous: AccountClaimState = accountClaimInitial,
   formData: FormData,
@@ -245,11 +278,21 @@ export async function invokeStaffAccountRequest(
   const client = await createClient();
   const { data: authData } = await client.auth.getUser();
   if (!authData.user) return { ...accountClaimInitial, message: "You must be signed in to invite staff." };
-  const { data, error } = await client.rpc("create_account_claim_request", { p_staff_member_id: staffMemberId, p_driver_id: null });
-  if (error || !data?.[0]?.raw_token) return { ...accountClaimInitial, message: "The account request could not be created." };
+  const { data, error } = await client.rpc("create_account_claim_request_v2", { p_staff_member_id: staffMemberId, p_driver_id: null });
+  if (error) return { ...accountClaimInitial, message: claimRequestError(error.message) };
+  if (!data?.[0]?.raw_token) return { ...accountClaimInitial, message: "Supabase did not return a registration token." };
   const result = data[0] as { raw_token: string; expires_at: string };
   revalidatePath("/staff");
-  return { success: true, message: "Account request created.", registrationLink: `${registrationOrigin()}/register/staff/${result.raw_token}`, expiresAt: result.expires_at };
+  const registrationRole = formData.get("registrationRole") === "guard" ? "guard" : "staff";
+  return { success: true, message: "Account request created.", registrationLink: `${registrationOrigin()}/register/${registrationRole}/${result.raw_token}`, expiresAt: result.expires_at };
+}
+
+function claimRequestError(message: string) {
+  if (message.includes("staff_already_claimed") || message.includes("driver_already_claimed")) return "This account is already claimed.";
+  if (message.includes("warehouse_not_owned")) return "This record belongs to a warehouse you cannot manage.";
+  if (message.includes("not_authenticated")) return "Your admin session expired. Sign in again.";
+  if (message.includes("staff_member_not_found") || message.includes("driver_not_found")) return "The member record no longer exists.";
+  return `The account request failed: ${message}`;
 }
 
 export async function revokeStaffAccountRequest(

@@ -8,7 +8,7 @@ export async function proxy(request: NextRequest) {
   const maintenanceEnabled = isMaintenanceEnabled(process.env.WAREGUARD_MAINTENANCE_MODE);
   const maintenanceRoute = pathname === "/maintenance";
   const loginRoute = pathname === "/login";
-  const registrationRoute = pathname === "/register/system-admin" || pathname.startsWith("/register/staff/") || pathname.startsWith("/register/driver/");
+  const registrationRoute = pathname === "/register/system-admin" || pathname === "/register/staff" || pathname === "/register/guard" || pathname === "/register/driver" || pathname.startsWith("/register/staff/") || pathname.startsWith("/register/driver/");
   const publicRoute = maintenanceRoute || loginRoute || registrationRoute;
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??

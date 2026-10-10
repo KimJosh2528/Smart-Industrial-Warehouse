@@ -4,7 +4,6 @@ import { getAuthorizedWarehouses } from "./warehouse-scope";
 export const deviceTypes = ["controller", "camera", "sensor_module", "access_module", "other"] as const;
 export const deviceActivityStates = ["active", "inactive"] as const;
 export const deviceConnectivityStates = ["online", "offline", "never"] as const;
-export const environmentalStates = ["NORMAL", "WARNING", "DANGER"] as const;
 
 export type DeviceFilters = {
   search: string;
@@ -18,13 +17,14 @@ export type DeviceItem = {
   id: string;
   warehouseId: string;
   name: string;
+  areaId: string | null;
   deviceType: string;
   serialNumber: string | null;
   isActive: boolean;
-  capabilities: Record<string, unknown>;
+  iotRole: string | null;
+  lifecycleStatus: string;
   deviceUid: string | null;
   lastSeenAt: string | null;
-  environmentalState: string | null;
   createdAt: string;
   updatedAt: string;
   connectivity: "online" | "offline" | "never";
@@ -66,7 +66,7 @@ export async function loadDevices(filters: DeviceFilters): Promise<DevicesData> 
 
   let query = client
     .from("devices")
-    .select("id,warehouse_id,name,device_type,serial_number,is_active,capabilities,device_uid,last_seen_at,environmental_state,created_at,updated_at")
+    .select("id,warehouse_id,area_id,name,device_type,iot_role,serial_number,is_active,device_uid,last_seen_at,lifecycle_status,created_at,updated_at")
     .in("warehouse_id", warehouseIds)
     .order("name");
 
@@ -75,7 +75,6 @@ export async function loadDevices(filters: DeviceFilters): Promise<DevicesData> 
   if (validFilter(deviceTypes, filters.deviceType)) query = query.eq("device_type", filters.deviceType);
   if (filters.activity === "active") query = query.eq("is_active", true);
   if (filters.activity === "inactive") query = query.eq("is_active", false);
-  if (validFilter(environmentalStates, filters.environmentalState)) query = query.eq("environmental_state", filters.environmentalState);
 
   const { data: devices, error } = await query;
   if (error) return empty("Devices could not be loaded.");
@@ -84,13 +83,14 @@ export async function loadDevices(filters: DeviceFilters): Promise<DevicesData> 
     id: device.id,
     warehouseId: device.warehouse_id,
     name: device.name,
+    areaId: device.area_id,
     deviceType: device.device_type,
     serialNumber: device.serial_number,
     isActive: device.is_active,
-    capabilities: (device.capabilities ?? {}) as Record<string, unknown>,
+    iotRole: device.iot_role,
+    lifecycleStatus: device.lifecycle_status,
     deviceUid: device.device_uid,
     lastSeenAt: device.last_seen_at,
-    environmentalState: device.environmental_state,
     createdAt: device.created_at,
     updatedAt: device.updated_at,
     connectivity: getConnectivity(device.last_seen_at),

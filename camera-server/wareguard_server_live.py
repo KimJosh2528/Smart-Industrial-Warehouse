@@ -6,8 +6,7 @@ Run (from the ESP32_Face_Test folder):
     defaults: CAM_IP below, port 5001
 
 Pages (on the laptop use http://127.0.0.1:5001/..., the ESP32 uses http://192.168.137.1:5001/...):
-    /live                  live camera with face boxes, names and scores
-    /verify?type=face      OK <name> | DENY unknown | ERR <reason>
+    /live                  live truck plate camera
     /verify?type=plate     OK <label> | DENY <text>  | ERR <reason>
     /ping                  pong
 
@@ -17,7 +16,7 @@ ONE stream client at a time, and this server is that client.
 
 Needs:  pip install flask   (plus opencv, easyocr, requests)
 """
-import json, os, re, sys, time, threading
+import base64, hashlib, hmac, json, os, re, sys, time, threading
 import cv2
 import numpy as np
 import requests
@@ -28,6 +27,34 @@ from flask import Flask, request, Response, redirect
 VERSION = "NEW-FILE v14 (fast plate)"
 CAM_IP = sys.argv[1] if len(sys.argv) > 1 else "192.168.137.234"
 PORT   = int(sys.argv[2]) if len(sys.argv) > 2 else 5001
+
+# The development machine may have a dead local proxy configured. The ESP32-CAM
+# is on the local hotspot, so camera HTTP and MJPEG traffic must bypass it.
+_no_proxy_hosts = {"localhost", "127.0.0.1", "::1", CAM_IP}
+os.environ["NO_PROXY"] = ",".join(_no_proxy_hosts)
+os.environ["no_proxy"] = os.environ["NO_PROXY"]
+
+# Optional cloud audit/authorization bridge. When these are not configured the
+# existing local ESP HTTP verification flow behaves exactly as before.
+CLOUD_FUNCTIONS_URL = os.environ.get("WG_FUNCTIONS_URL", "").rstrip("/")
+CLOUD_DEVICE_UID = os.environ.get("WG_DEVICE_UID", "")
+CLOUD_DEVICE_SECRET = os.environ.get("WG_DEVICE_SECRET", "")
+CLOUD_AREA_ID = os.environ.get("WG_CAMERA_AREA_ID", "")
+CLOUD_STAFF_AREA_ID = os.environ.get("WG_CAMERA_STAFF_AREA_ID", os.environ.get("WG_STAFF_AREA", CLOUD_AREA_ID))
+CLOUD_TRUCK_AREA_ID = os.environ.get("WG_CAMERA_TRUCK_AREA_ID", os.environ.get("WG_TRUCK_AREA", CLOUD_AREA_ID))
+CLOUD_ANON_KEY = os.environ.get("WG_ANON_KEY", "")
+CLOUD_TIMEOUT = float(os.environ.get("WG_CLOUD_TIMEOUT", "8"))
+_cloud_lock = threading.Lock()
+_cloud_last_ts = 0
+
+def cloud_config_status():
+    return {
+        "url": bool(CLOUD_FUNCTIONS_URL),
+        "uid": bool(CLOUD_DEVICE_UID),
+        "secret": bool(CLOUD_DEVICE_SECRET),
+        "truck_area": bool(CLOUD_TRUCK_AREA_ID),
+        "anon_key": bool(CLOUD_ANON_KEY),
+    }
 
 # Live view orientation (display only, does not change the checks).
 # The camera picture is mirrored. True = flip it so text reads normally.
@@ -145,8 +172,12 @@ print("Authorized plates:", list(authorized.values()))
 reader = easyocr.Reader(["en"], gpu=False)
 
 # ---------------------------------------------------------------- camera
+camera_http = requests.Session()
+camera_http.trust_env = False
+
+
 def cam_get(path, timeout=8):
-    return requests.get(f"http://{CAM_IP}{path}", timeout=timeout)
+    return camera_http.get(f"http://{CAM_IP}{path}", timeout=timeout)
 
 
 def set_size(val):
@@ -209,7 +240,9 @@ def detect_sizes():
 # ---------------------------------------------------------------- live view
 live = {"raw": None, "t": 0.0, "jpg": None, "ok": False}
 last_result = {"text": "", "t": 0.0}
+last_detection = {"observed": "", "score": None}
 plate_mode = {"on": False}      # False = FACE mode, True = TRUCK PLATE mode (set by the buttons or by a check)
+selected_mode = {"value": "truck"}  # this demo has one camera mode: truck plate
 flip = {"face": FACE_VIEW_FLIP, "plate": PLATE_VIEW_FLIP}   # can be toggled live with the Flip view button
 hold = {"until": 0.0, "jpg": None}                          # frozen picture shown after a check
 shot = {"img": None, "box": None, "label": ""}              # picture captured by the last check
@@ -228,6 +261,11 @@ def message_jpg(msg):
 
 def annotate(frame):
     h, w = frame.shape[:2]
+
+    if selected_mode["value"] in ("enroll", "draft"):
+        label = "FACE ENROLL CAPTURE" if selected_mode["value"] == "enroll" else "FACE DRAFT CAPTURE"
+        cv2.putText(frame, label, (6, 20), FONT, 0.6, (255, 255, 0), 1)
+        return to_jpg(cv2.resize(frame, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC))
 
     # TRUCK PLATE CHECK: plate picture only, no face boxes or names
     if plate_mode["on"]:
@@ -378,8 +416,9 @@ def plate_ocr(img):
 
 
 # ---------------------------------------------------------------- checks
-def verify_face():
-    print("\n==============================\n[FACE] Starting verification (freeze + burst)")
+def verify_face(purpose="verify"):
+    action = "enrollment capture" if purpose == "enroll" else "verification"
+    print(f"\n==============================\n[FACE] Starting {action} (freeze + burst)")
     frames = burst_from_stream(BURST_FRAMES, BURST_GAP)
     if len(frames) < 3:
         print("[FACE] stream thin, adding /capture frames")
@@ -449,6 +488,7 @@ def verify_face():
         print(f"[FACE] ambiguous: {accepted} vs {others} -> deny")
         accepted = None
 
+    last_detection.update(observed=accepted or best_name, score=best_score)
     shot.update(img=best_img if best_img is not None else frames[-1], box=best_box,
                 label=f"{best_name} {best_score:.2f}")
     print(f"[FACE] FINAL: {accepted or 'unknown'}")
@@ -460,6 +500,9 @@ def verify_face():
 
 
 def verify_plate():
+    # Pick up truck create/assignment changes without restarting this server.
+    global authorized
+    authorized = load_plates()
     print("\n==============================\n[PLATE] fast capture from stream")
     frames = burst_from_stream(PLATE_BURST, BURST_GAP)
     if len(frames) < 2:
@@ -495,18 +538,118 @@ def verify_plate():
                 break
         for label, v in votes.items():
             if v >= PLATE_NEED:
+                last_detection.update(observed=k, score=max((c for t, c in all_good if norm(t) == k), default=None))
                 print(f"[PLATE] matched {label} ({v} frame)")
                 return f"OK {label}"
 
     if not all_good:
         return "ERR no_text"
-    best_text = max(all_good, key=lambda x: x[1])[0]
+    best_text, best_score = max(all_good, key=lambda x: x[1])
+    last_detection.update(observed=best_text, score=best_score)
     return f"DENY {best_text}"
+
+
+def capture_face_only():
+    """Capture a face image without treating it as an authentication attempt."""
+    print("\n==============================\n[FACE] Starting capture-only burst")
+    frames = burst_from_stream(BURST_FRAMES, BURST_GAP)
+    if len(frames) < 3:
+        for _ in range(3):
+            frame = capture()
+            if frame is not None:
+                frames.append(frame)
+    if not frames:
+        return "ERR no_image", None, None
+
+    candidates = []
+    for frame in frames:
+        analysed = analyse(frame, FACE_UNMIRROR)
+        if analysed is not None:
+            candidates.append((analysed[0], frame, analysed[1], analysed[2], analysed[3]))
+    if not candidates:
+        shot.update(img=frames[-1], box=None, label="no face")
+        show_reading(frames[-1])
+        return "ERR no_face", None, None
+
+    best = max(candidates, key=lambda item: item[0])
+    _, original, work, face, box = best
+    recognized_label, recognized_score = best_match(verify_rec, work, face)
+    label = recognized_label if recognized_score >= FACE_THRESHOLD else None
+    shot.update(img=original, box=box, label=label or "captured")
+    show_reading(original)
+    encoded = cv2.imencode(".jpg", original, [cv2.IMWRITE_JPEG_QUALITY, 90])[1]
+    image_base64 = base64.b64encode(encoded.tobytes()).decode("ascii")
+    print(f"[FACE] captured only; recognized label: {label or 'none'}")
+    return "OK captured", image_base64, label
+
+
+def send_cloud_auth(kind, result):
+    """Forward the local recognition result for server-side approval and logging."""
+    area_id = CLOUD_STAFF_AREA_ID if kind == "face" else CLOUD_TRUCK_AREA_ID
+    if not (CLOUD_FUNCTIONS_URL and CLOUD_DEVICE_UID and CLOUD_DEVICE_SECRET and area_id):
+        missing = [name for name, present in (
+            ("WG_FUNCTIONS_URL", bool(CLOUD_FUNCTIONS_URL)),
+            ("WG_DEVICE_UID", bool(CLOUD_DEVICE_UID)),
+            ("WG_DEVICE_SECRET", bool(CLOUD_DEVICE_SECRET)),
+            ("WG_CAMERA_TRUCK_AREA_ID", bool(area_id)),
+        ) if not present]
+        print(f"[CLOUD] skipped; missing: {', '.join(missing)}")
+        return None
+    observed = last_detection.get("observed", "").strip()
+    if not observed:
+        return None
+    method = "staff_face" if kind == "face" else "truck_plate"
+    body = {"area_id": area_id, "method": method, "observed": observed}
+    if isinstance(last_detection.get("score"), (int, float)):
+        body["score"] = float(last_detection["score"])
+    raw = json.dumps(body, separators=(",", ":")).encode("utf-8")
+    global _cloud_last_ts
+    with _cloud_lock:
+        timestamp = max(int(time.time()), _cloud_last_ts + 1)
+        _cloud_last_ts = timestamp
+        signature = hmac.new(
+            CLOUD_DEVICE_SECRET.encode("utf-8"),
+            str(timestamp).encode("ascii") + b"." + raw,
+            hashlib.sha256,
+        ).hexdigest()
+    try:
+        headers = {
+            "Content-Type": "application/json",
+            "X-Device-UID": CLOUD_DEVICE_UID,
+            "X-Timestamp": str(timestamp),
+            "X-Signature": signature,
+        }
+        if CLOUD_ANON_KEY:
+            headers["apikey"] = CLOUD_ANON_KEY
+            headers["Authorization"] = f"Bearer {CLOUD_ANON_KEY}"
+        response = requests.post(
+            f"{CLOUD_FUNCTIONS_URL}/camera-auth",
+            data=raw,
+            headers=headers,
+            timeout=CLOUD_TIMEOUT,
+        )
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {"status": "error", "message": "invalid_cloud_response"}
+        print(f"[CLOUD] {method} HTTP {response.status_code}: {payload}")
+        return payload
+    except requests.RequestException as error:
+        print("[CLOUD] unavailable:", error)
+        return {"status": "error", "message": "cloud_unavailable"}
 
 
 # ---------------------------------------------------------------- web server
 app = Flask(__name__)
 busy = threading.Lock()
+
+
+@app.after_request
+def allow_dashboard_camera_control(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
 
 
 def text(s):
@@ -526,21 +669,20 @@ def index():
 @app.route("/live")
 def live_page():
     html = """<html><body style="margin:0;background:#111;color:#eee;font-family:sans-serif">
-<div style="padding:10px 10px 0 10px">
-  <button onclick="mode('face')" style="font-size:18px;padding:8px 16px;background:#246;color:#fff">FACE mode (STAFF)</button>
-  <button onclick="mode('plate')" style="font-size:18px;padding:8px 16px;background:#642;color:#fff">TRUCK PLATE mode (TRUCK)</button>
-  <button onclick="mode('flip')" style="font-size:18px;padding:8px 16px">Flip view</button>
-</div>
+ <div style="padding:10px 10px 0 10px">
+  <button onclick="mode('truck')" style="font-size:18px;padding:8px 16px;background:#642;color:#fff">TRUCK AUTH</button>
+ </div>
 <div style="padding:10px">
-  <button id="runbtn" onclick="run('auto')" style="font-size:18px;padding:8px 16px">Run check</button>
-  <span id="out" style="font-size:28px;font-weight:bold;margin-left:14px;vertical-align:middle"></span>
+  <span id="out" style="font-size:28px;font-weight:bold;margin-left:14px;vertical-align:middle;color:#9de">READY — press GPIO35</span>
 </div>
 <img src="/live.mjpg" style="width:auto;max-width:100%;max-height:78vh;display:block">
-<p style="padding:0 10px;font-size:14px">Running: @@V@@ - Run check tests whichever mode is on. The result stays beside the button until the next check (AUTHORIZED / UNAUTHORIZED + name). TRUCK PLATE mode is the only reversed view and has no face boxes.</p>
-<p style="padding:0 10px">Green box = recognised, red = unknown.</p>
+  <p style="padding:0 10px;font-size:14px">Running: @@V@@ - truck plate authentication only. RFID is handled by the staff gate.</p>
+<p style="padding:0 10px">Plate authorization opens the truck gate; unrecognized plates remain closed.</p>
 <script>
 async function mode(m) {
-  await fetch('/mode?m=' + m);
+  try { await fetch('/mode?m=truck'); } catch (e) {}
+  document.getElementById('out').textContent = 'READY — press GPIO35';
+  document.getElementById('out').style.color = '#9de';
 }
 function fmt(r) {
   if (r.startsWith('OK')) return ['AUTHORIZED ' + r.slice(3).trim(), '#3ddc84'];
@@ -551,19 +693,31 @@ async function poll() {
   const out = document.getElementById('out');
   try {
     const d = await (await fetch('/last')).json();
-    if (d.busy) { out.textContent = 'checking...'; out.style.color = '#ddd'; }
-    else if (d.text) { const f = fmt(d.text); out.textContent = f[0]; out.style.color = f[1]; }
+    if (d.busy) {
+      out.textContent = 'CHECKING PLATE — ESP BUTTON RECEIVED...';
+      out.style.color = '#ffd54a';
+    } else if (d.text) {
+      const f = fmt(d.text);
+      out.textContent = f[0];
+      out.style.color = f[1];
+    } else {
+      out.textContent = 'READY — press GPIO35';
+      out.style.color = '#9de';
+    }
   } catch (e) {}
 }
 async function run(t) {
   const btn = document.getElementById('runbtn');
   btn.disabled = true;
-  try { await fetch('/verify?type=' + t); } catch (e) {}
+  try {
+    await fetch('/verify?type=plate', {headers: {'X-WareGuard-Trigger': 'esp-button'}});
+  } catch (e) {}
   btn.disabled = false;
   poll();
 }
-setInterval(poll, 500);
+mode('truck');
 poll();
+setInterval(poll, 300);
 </script>
 </body></html>"""
     return Response(html.replace("@@V@@", VERSION), mimetype="text/html")
@@ -588,36 +742,41 @@ def set_mode():
     if m == "flip":
         k = "plate" if plate_mode["on"] else "face"
         flip[k] = not flip[k]
-    elif m in ("face", "plate"):
-        plate_mode["on"] = (m == "plate")
-    return text("mode " + ("plate" if plate_mode["on"] else "face"))
+    elif m == "truck":
+        selected_mode["value"] = "truck"
+        plate_mode["on"] = True
+    elif m in ("staff", "enroll", "draft"):
+        return text("mode truck (only truck plate mode is enabled)")
+    return text("mode " + selected_mode["value"])
 
 
 @app.route("/getmode")
 def get_mode():
-    return text("TRUCK" if plate_mode["on"] else "STAFF")
+    return text("TRUCK")
+
+
+@app.route("/getui_mode")
+def get_ui_mode():
+    return text(selected_mode["value"])
 
 
 @app.route("/last")
 def last_json():
     return Response(json.dumps({"busy": busy.locked(), "text": last_result["text"],
-                                "kind": last_result.get("kind", ""), "t": last_result["t"]}),
+                                "kind": last_result.get("kind", ""), "t": last_result["t"],
+                                "cloud": last_result.get("cloud")}),
                     mimetype="application/json")
 
 
-@app.route("/verify")
-def verify():
-    kind = request.args.get("type", "").strip().lower()
-    if kind == "auto":                      # the Run check button: test whichever mode is on
-        kind = "plate" if plate_mode["on"] else "face"
-    if kind not in ("face", "plate"):
-        return text("ERR bad_type")
+def run_check(kind, purpose="verify"):
+    """Run a local camera check. Enrollment never sends a cloud auth event."""
     if not busy.acquire(blocking=False):
-        return text("ERR busy")
+        return "ERR busy"
     t0 = time.time()
+    last_detection.update(observed="", score=None)
 
     try:
-        result = verify_face() if kind == "face" else verify_plate()
+        result = verify_face(purpose) if kind == "face" else verify_plate()
     except requests.RequestException as e:
         print("[SERVER] camera error:", e)
         result = "ERR cam_offline"
@@ -626,15 +785,61 @@ def verify():
         result = "ERR server"
     finally:
         busy.release()
+
+    cloud = None if purpose == "enroll" else send_cloud_auth(kind, result)
+    last_result["cloud"] = cloud
     last_result.update(text=result, t=time.time(), kind=kind)
-    if FACE_FREEZE:                         # freeze for BOTH face and plate
+    if FACE_FREEZE:
         try:
             freeze(kind, result)
         except Exception as e:
             print("[SERVER] freeze error:", repr(e))
             hold["until"] = 0.0
-    print(f"[{kind}] {result}  ({time.time() - t0:.1f}s)")
-    return text(result)
+    print(f"[{kind}/{purpose}] {result}  ({time.time() - t0:.1f}s)")
+    return result
+
+
+@app.route("/enroll")
+def enroll():
+    """Capture a face for enrollment without authenticating it."""
+    kind = request.args.get("type", "").strip().lower()
+    if kind != "face":
+        return text("ERR bad_type")
+    return capture_only_response("enroll")
+
+
+@app.route("/draft")
+def draft():
+    """Capture a pending applicant face without authenticating it."""
+    kind = request.args.get("type", "").strip().lower()
+    if kind != "face":
+        return text("ERR bad_type")
+    return capture_only_response("draft")
+
+
+def capture_only_response(purpose):
+    if not busy.acquire(blocking=False):
+        return Response(json.dumps({"status": "error", "message": "busy"}), mimetype="application/json")
+    try:
+        result, image_base64, label = capture_face_only()
+    finally:
+        busy.release()
+    last_result.update(text=result, t=time.time(), kind=purpose, cloud=None)
+    return Response(json.dumps({"status": "success" if result.startswith("OK") else "error", "message": result, "image_base64": image_base64, "face_label": label}), mimetype="application/json")
+
+
+@app.route("/verify")
+def verify():
+    if request.headers.get("X-WareGuard-Trigger") != "esp-button":
+        return text("ERR hardware_trigger_required")
+    kind = request.args.get("type", "").strip().lower()
+    if selected_mode["value"] != "truck":
+        return text("ERR truck_plate_mode_required")
+    if kind == "auto":
+        kind = "plate"
+    if kind != "plate":
+        return text("ERR bad_type")
+    return text(run_check(kind))
 
 
 if __name__ == "__main__":
@@ -643,5 +848,6 @@ if __name__ == "__main__":
     threading.Thread(target=stream_loop, daemon=True).start()
     print(f"\nWAREGUARD VERIFICATION SERVER  {VERSION}  (camera {CAM_IP}, port {PORT})")
     print(f"  Live view : http://127.0.0.1:{PORT}/live")
-    print(f"  Face test : http://127.0.0.1:{PORT}/verify?type=face\n")
+    print(f"  Truck auth: ESP button -> /verify?type=plate\n")
+    print(f"  Cloud config: {cloud_config_status()}")
     app.run(host="0.0.0.0", port=PORT, threaded=True)
