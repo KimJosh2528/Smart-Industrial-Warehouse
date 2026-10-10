@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { credentialManagementDiagnostic, credentialManagementError, invokeCredentialManagement } from "@/lib/credential-management";
+import { resolveAuthorizedWarehouseId } from "@/lib/warehouse-scope";
+import { syncCameraPlateRecord } from "@/lib/camera-plates";
 
 export type TruckMutationState = { success: boolean; message: string };
 export type TruckCredentialMutationState = { success: boolean; message: string };
@@ -28,24 +30,23 @@ async function authenticatedClient() {
 }
 
 export async function createTruck(_previous: TruckMutationState = initial, formData: FormData): Promise<TruckMutationState> {
-  const warehouseId = String(formData.get("warehouseId") ?? "");
   const identityLabel = String(formData.get("identityLabel") ?? "");
   const plateNumber = String(formData.get("plateNumber") ?? "");
-  const division = String(formData.get("division") ?? "");
-  const isActive = formData.get("isActive") === "on";
-  if (!warehouseId || !identityLabel.trim() || !plateNumber.trim()) return { ...initial, message: "Enter the truck identity and plate number." };
+  if (!identityLabel.trim() || !plateNumber.trim()) return { ...initial, message: "Enter the truck identity and plate number." };
 
   const client = await authenticatedClient();
   if (!client) return { ...initial, message: "You must be signed in to create trucks." };
-  const { error } = await client.rpc("create_truck", {
-    p_warehouse_id: warehouseId,
-    p_identity_label: identityLabel,
-    p_plate_number: plateNumber,
-    p_division: division || null,
-    p_is_active: isActive,
-  });
+  const authorizedWarehouseId = await resolveAuthorizedWarehouseId(client, null);
+  if (!authorizedWarehouseId) return { ...initial, message: "You are not authorized to create trucks in that warehouse." };
+  const { error } = await client.from("trucks").insert({ warehouse_id: authorizedWarehouseId, identity_label: identityLabel.trim(), plate_number: plateNumber.trim(), normalized_plate: plateNumber.trim().toUpperCase().replace(/[^A-Z0-9]/g, ""), division: null, is_active: true });
   if (error) return { ...initial, message: truckError(error.message) };
+  try {
+    await syncCameraPlateRecord({ plate: plateNumber, truckName: identityLabel });
+  } catch {
+    return { success: true, message: "Truck created, but plates.txt could not be updated." };
+  }
   revalidatePath("/trucks");
+  revalidatePath("/fleet");
   revalidatePath("/");
   return { success: true, message: "Truck created." };
 }
@@ -54,8 +55,7 @@ export async function updateTruck(_previous: TruckMutationState = initial, formD
   const truckId = String(formData.get("truckId") ?? "");
   const identityLabel = String(formData.get("identityLabel") ?? "");
   const plateNumber = String(formData.get("plateNumber") ?? "");
-  const division = String(formData.get("division") ?? "");
-  const isActive = formData.get("isActive") === "on";
+  const isActive = true;
   if (!truckId || !identityLabel.trim() || !plateNumber.trim()) return { ...initial, message: "Enter the truck identity and plate number." };
 
   const client = await authenticatedClient();
@@ -64,11 +64,21 @@ export async function updateTruck(_previous: TruckMutationState = initial, formD
     p_truck_id: truckId,
     p_identity_label: identityLabel,
     p_plate_number: plateNumber,
-    p_division: division || null,
+    p_division: null,
     p_is_active: isActive,
   });
   if (error) return { ...initial, message: truckError(error.message) };
+  const { data: currentTruck } = await client.from("trucks").select("plate_number,current_driver_id").eq("id", truckId).single();
+  const { data: currentDriver } = currentTruck?.current_driver_id
+    ? await client.from("drivers").select("display_name").eq("id", currentTruck.current_driver_id).single()
+    : { data: null };
+  try {
+    await syncCameraPlateRecord({ plate: currentTruck?.plate_number ?? plateNumber, truckName: identityLabel, driverName: currentDriver?.display_name });
+  } catch {
+    return { success: true, message: "Truck updated, but plates.txt could not be updated." };
+  }
   revalidatePath("/trucks");
+  revalidatePath("/fleet");
   return { success: true, message: "Truck updated." };
 }
 
@@ -83,6 +93,7 @@ export async function setTruckActive(_previous: TruckMutationState = initial, fo
   if (error) return { ...initial, message: truckError(error.message) };
   revalidatePath("/trucks");
   revalidatePath("/drivers");
+  revalidatePath("/fleet");
   return { success: true, message: isActive ? "Truck activated." : "Truck deactivated." };
 }
 
@@ -112,6 +123,10 @@ export async function manageTruckCredential(
     truck_id: truckId,
   });
   if (errorMessage) return { ...credentialInitial, message: credentialManagementError(errorMessage, "The truck credential change could not be completed.") };
+  if (operation === "add" && credentialType === "truck_rfid") {
+    const { error: poolError } = await client.rpc("assign_truck_rfid_pool", { p_truck_id: truckId, p_uid_label: rawCredential });
+    if (poolError) return { ...credentialInitial, message: "RFID was added, but the RFID pool could not be updated." };
+  }
 
   revalidatePath("/trucks");
   return { success: true, message: operation === "add" ? "Credential added." : "Credential replaced." };

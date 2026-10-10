@@ -2,15 +2,73 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { resolveAuthorizedWarehouseId } from "@/lib/warehouse-scope";
 
 export type AreaMutationState = { success: boolean; message: string };
 const initialState: AreaMutationState = { success: false, message: "" };
+
+export async function saveRoomEnvironmentConfig(
+  _previous: AreaMutationState = initialState,
+  formData: FormData,
+): Promise<AreaMutationState> {
+  const areaId = String(formData.get("areaId") ?? "");
+  if (!areaId) return { success: false, message: "Room configuration is missing its room." };
+  const numberOrNull = (name: string) => {
+    const value = String(formData.get(name) ?? "").trim();
+    return value === "" ? null : Number(value);
+  };
+  const client = await createClient();
+  const { data: area } = await client.from("warehouse_areas").select("id,warehouse_id,area_type_code").eq("id", areaId).maybeSingle();
+  if (!area || area.area_type_code !== "room") return { success: false, message: "That room is not available in your warehouse." };
+  const warehouseId = await resolveAuthorizedWarehouseId(client, area.warehouse_id);
+  if (!warehouseId) return { success: false, message: "You are not authorized to change this room." };
+  const values = {
+    area_id: areaId,
+    warehouse_id: warehouseId,
+    temperature_min_c: numberOrNull("temperatureMinC"),
+    temperature_max_c: numberOrNull("temperatureMaxC"),
+    temperature_warning_low_c: numberOrNull("temperatureWarningLowC"),
+    temperature_danger_low_c: numberOrNull("temperatureDangerLowC"),
+    temperature_warning_high_c: numberOrNull("temperatureWarningHighC"),
+    temperature_danger_high_c: numberOrNull("temperatureDangerHighC"),
+    humidity_min_pct: numberOrNull("humidityMinPct"),
+    humidity_max_pct: numberOrNull("humidityMaxPct"),
+    humidity_warning_low_pct: numberOrNull("humidityWarningLowPct"),
+    humidity_danger_low_pct: numberOrNull("humidityDangerLowPct"),
+    humidity_warning_high_pct: numberOrNull("humidityWarningHighPct"),
+    humidity_danger_high_pct: numberOrNull("humidityDangerHighPct"),
+    smoke_max_value: numberOrNull("smokeMaxValue"),
+    smoke_warning_value: numberOrNull("smokeWarningValue"),
+    smoke_danger_value: numberOrNull("smokeDangerValue"),
+    gas_exposure_seconds: numberOrNull("gasExposureSeconds"),
+  };
+  const numericValues = Object.values(values).filter((value): value is number => typeof value === "number");
+  if (numericValues.some((value) => !Number.isFinite(value))) return { success: false, message: "Enter valid numeric threshold values." };
+  if (numericValues.some((value) => value < 0)) return { success: false, message: "Threshold values cannot be negative." };
+  const ordered = [
+    [values.temperature_danger_low_c, values.temperature_warning_low_c, values.temperature_min_c, values.temperature_max_c, values.temperature_warning_high_c, values.temperature_danger_high_c],
+    [values.humidity_danger_low_pct, values.humidity_warning_low_pct, values.humidity_min_pct, values.humidity_max_pct, values.humidity_warning_high_pct, values.humidity_danger_high_pct],
+    [values.smoke_warning_value, values.smoke_danger_value],
+  ];
+  if (ordered.some((band) => band.filter((value): value is number => value !== null).some((value, index, list) => index > 0 && value < list[index - 1]))) return { success: false, message: "Keep each threshold band in low-to-high order." };
+  const humidityValues = [values.humidity_danger_low_pct, values.humidity_warning_low_pct, values.humidity_min_pct, values.humidity_max_pct, values.humidity_warning_high_pct, values.humidity_danger_high_pct].filter((value): value is number => value !== null);
+  if (humidityValues.some((value) => value > 100)) return { success: false, message: "Humidity thresholds must be between 0 and 100%." };
+  if (values.gas_exposure_seconds !== null && values.gas_exposure_seconds <= 0) return { success: false, message: "Gas exposure duration must be greater than zero." };
+  const { error } = await client.from("room_environment_configs").upsert(values, { onConflict: "area_id" });
+  if (error) return { success: false, message: "The room threshold configuration could not be saved." };
+  revalidatePath("/areas");
+  revalidatePath("/room-settings");
+  revalidatePath("/sensor-demo");
+  revalidatePath("/sensor-readings");
+  return { success: true, message: "Room threshold configuration saved." };
+}
 const allowedStates = ["locked", "unlocked", "emergency_release"] as const;
 
-function safeAreaError(message: string | undefined, operation: "add" | "state") {
+function safeAreaError(message: string | undefined, operation: "add" | "state" | "delete") {
   if (message?.includes("duplicate key") || message?.includes("warehouse_areas_warehouse_id_area_type_code_key")) return "That area is already configured for this warehouse.";
   if (message?.includes("row-level security") || message?.includes("not authorized")) return "You are not authorized to change this warehouse.";
   if (message?.includes("foreign key")) return "That area type is not available.";
+  if (operation === "delete") return "The area could not be deleted. Remove its related assignments first.";
   return operation === "add" ? "The warehouse area could not be added." : "The area state could not be updated.";
 }
 
@@ -20,19 +78,19 @@ export async function addWarehouseArea(
 ): Promise<AreaMutationState> {
   const warehouseId = String(formData.get("warehouseId") ?? "");
   const areaTypeCode = String(formData.get("areaTypeCode") ?? "");
-  if (!warehouseId || !areaTypeCode) return { ...initialState, message: "Select a warehouse area type." };
+  const requestedName = String(formData.get("name") ?? "").trim();
+  const name = areaTypeCode === "staff_entrance" ? "Staff Main Entrance" : areaTypeCode === "truck_entrance" ? "Truck Entrance" : requestedName;
+  const entranceCategory = areaTypeCode === "staff_entrance" ? "staff_main" : areaTypeCode === "truck_entrance" ? "truck_main" : null;
+  if (!warehouseId || !areaTypeCode || !name) return { ...initialState, message: "Area type and name are required." };
 
   const client = await createClient();
-  const { data: authData } = await client.auth.getUser();
-  if (!authData.user) return { ...initialState, message: "You must be signed in to manage warehouse areas." };
-
-  const { data: visibleWarehouse, error: warehouseError } = await client.from("warehouses").select("id").eq("id", warehouseId).maybeSingle();
-  if (warehouseError || !visibleWarehouse) return { ...initialState, message: "You are not authorized to change this warehouse." };
+  const authorizedWarehouseId = await resolveAuthorizedWarehouseId(client, warehouseId);
+  if (!authorizedWarehouseId) return { ...initialState, message: "You are not authorized to change this warehouse." };
 
   const { data: knownType, error: typeError } = await client.from("warehouse_area_types").select("code").eq("code", areaTypeCode).maybeSingle();
   if (typeError || !knownType) return { ...initialState, message: "That area type is not available." };
 
-  const { error } = await client.from("warehouse_areas").insert({ warehouse_id: warehouseId, area_type_code: areaTypeCode, state: "locked" });
+  const { error } = await client.from("warehouse_areas").insert({ warehouse_id: authorizedWarehouseId, name, area_type_code: areaTypeCode, entrance_category: entranceCategory || null, state: "locked" });
   if (error) return { ...initialState, message: safeAreaError(error.message, "add") };
 
   revalidatePath("/areas");
@@ -61,6 +119,27 @@ export async function updateWarehouseAreaState(
   revalidatePath("/areas");
   revalidatePath("/staff");
   return { success: true, message: "Area state updated." };
+}
+
+export async function deleteWarehouseArea(
+  _previous: AreaMutationState = initialState,
+  formData: FormData,
+): Promise<AreaMutationState> {
+  const areaId = String(formData.get("areaId") ?? "");
+  if (!areaId) return { ...initialState, message: "The area deletion request was invalid." };
+
+  const client = await createClient();
+  const { data: area, error: areaError } = await client.from("warehouse_areas").select("id,warehouse_id").eq("id", areaId).maybeSingle<{ id: string; warehouse_id: string }>();
+  if (areaError || !area) return { ...initialState, message: "You are not authorized to delete this area." };
+  const authorizedWarehouseId = await resolveAuthorizedWarehouseId(client, area.warehouse_id);
+  if (!authorizedWarehouseId) return { ...initialState, message: "You are not authorized to delete this area." };
+
+  const { error } = await client.from("warehouse_areas").delete().eq("id", areaId).eq("warehouse_id", authorizedWarehouseId);
+  if (error) return { ...initialState, message: safeAreaError(error.message, "delete") };
+
+  revalidatePath("/areas");
+  revalidatePath("/staff");
+  return { success: true, message: "Warehouse area deleted." };
 }
 
 export type DepartmentAreaMutationState = { success: boolean; message: string };
@@ -140,11 +219,11 @@ export async function createDepartment(
   if (!warehouseId || !name.trim() || !code.trim()) return { ...departmentInitial, message: "Department name and code are required." };
 
   const client = await createClient();
-  const { data: authData } = await client.auth.getUser();
-  if (!authData.user) return { ...departmentInitial, message: "You must be signed in to manage departments." };
+  const authorizedWarehouseId = await resolveAuthorizedWarehouseId(client, warehouseId);
+  if (!authorizedWarehouseId) return { ...departmentInitial, message: "You are not authorized to manage this warehouse." };
 
   const { error } = await client.rpc("create_department", {
-    p_warehouse_id: warehouseId,
+    p_warehouse_id: authorizedWarehouseId,
     p_name: name,
     p_code: code,
   });

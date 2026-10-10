@@ -36,3 +36,17 @@ dashboard/.env
 dashboard/.next/
 dashboard/node_modules/
 dashboard/tsconfig.tsbuildinfo
+
+# ESP32 secrets
+firmware-arduino-ide/**/secrets.h
+
+# Python camera server generated files
+camera-server/__pycache__/
+camera-server/last_capture.jpg
+camera-server/last_face.jpg
+camera-server/last_plate.jpg
+
+
+
+.vercel
+.env*

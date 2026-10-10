@@ -1,4 +1,5 @@
 import { createClient } from "./supabase/server";
+import { getAuthorizedWarehouses } from "./warehouse-scope";
 
 export const safetySeverities = ["info", "warning", "critical"] as const;
 export const safetyStatuses = ["open", "acknowledged", "resolved"] as const;
@@ -79,29 +80,27 @@ export async function loadSafetyEmergencyData(filters: SafetyLogFilters): Promis
     return empty(filters, "Supabase is not configured.");
   }
 
-  const { data: warehouses, error: warehouseError } = await client
-    .from("warehouses")
-    .select("id")
-    .order("name")
-    .limit(1);
-  const warehouseId = warehouses?.[0]?.id;
-  if (warehouseError || !warehouseId) return empty(filters, warehouseError?.message ?? "No warehouse is available.");
+  const scope = await getAuthorizedWarehouses(client);
+  if (scope.error) return empty(filters, scope.error);
+  const warehouseIds = scope.warehouses.map((warehouse) => warehouse.id);
+  if (!warehouseIds.length) return empty(filters, "No warehouse is available.");
 
-  const [{ data: areaRows }, { data: areaTypes }, { data: devices }, { data: emergency }] = await Promise.all([
-    client.from("warehouse_areas").select("id,area_type_code").eq("warehouse_id", warehouseId),
-    client.from("warehouse_area_types").select("code,name"),
-    client.from("devices").select("id,name").eq("warehouse_id", warehouseId).order("name"),
-    client.from("warehouse_emergency_states").select("state,reason,changed_at").eq("warehouse_id", warehouseId).maybeSingle(),
+  const [{ data: areaRows }, { data: devices }, { data: emergency }] = await Promise.all([
+    client.from("warehouse_areas").select("id,name,area_type_code").in("warehouse_id", warehouseIds).eq("area_type_code", "room"),
+    client.from("devices").select("id,name").in("warehouse_id", warehouseIds).order("name"),
+    client.from("warehouse_emergency_states").select("state,reason,changed_at").in("warehouse_id", warehouseIds).order("changed_at", { ascending: false }).limit(1).maybeSingle(),
   ]);
 
-  const areaTypeNames = new Map((areaTypes ?? []).map((item) => [item.code, item.name]));
-  const areas = (areaRows ?? []).map((item) => ({ id: item.id, name: areaTypeNames.get(item.area_type_code) ?? item.area_type_code }));
+  const areas = (areaRows ?? []).map((item) => ({ id: item.id, name: item.name ?? item.area_type_code }));
   const deviceOptions = (devices ?? []).map((item) => ({ id: item.id, name: item.name }));
+  const roomIds = areas.map((area) => area.id);
+  if (!roomIds.length) return { ...empty(filters), configured: true, areas, devices: deviceOptions, emergency: emergency ? { state: emergency.state, reason: emergency.reason, changedAt: emergency.changed_at } : null };
 
   let query = client
     .from("safety_events")
     .select("id,event_type,severity,status,occurred_at,area_id,device_id,previous_environmental_state,environmental_state,sensor_reading_id,metadata", { count: "exact" })
-    .eq("warehouse_id", warehouseId)
+    .in("warehouse_id", warehouseIds)
+    .in("area_id", roomIds)
     .order("occurred_at", { ascending: false });
 
   if (filters.severity && safetySeverities.includes(filters.severity as (typeof safetySeverities)[number])) query = query.eq("severity", filters.severity);

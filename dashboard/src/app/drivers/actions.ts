@@ -3,13 +3,17 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { registrationOrigin } from "@/lib/account-claim-server";
+import { resolveAuthorizedWarehouseId } from "@/lib/warehouse-scope";
+import { syncCameraPlateRecord } from "@/lib/camera-plates";
 
 export type CreateDriverState = { success: boolean; message: string };
 export type DriverAssignmentState = { success: boolean; message: string };
 export type AccountClaimState = { success: boolean; message: string; registrationLink?: string; expiresAt?: string };
+export type DeleteDriverState = { success: boolean; message: string };
 const initial: CreateDriverState = { success: false, message: "" };
 const assignmentInitial: DriverAssignmentState = { success: false, message: "" };
 const accountClaimInitial: AccountClaimState = { success: false, message: "" };
+const deleteDriverInitial: DeleteDriverState = { success: false, message: "" };
 
 function creationError(message: string | undefined) {
   if (message?.includes("warehouse_not_owned")) return "You are not authorized to create drivers in that warehouse.";
@@ -40,11 +44,11 @@ export async function createDriver(_previous: CreateDriverState = initial, formD
   if (!warehouseId || !displayName.trim()) return { ...initial, message: "Enter a driver display name." };
 
   const client = await createClient();
-  const { data: authData } = await client.auth.getUser();
-  if (!authData.user) return { ...initial, message: "You must be signed in to create drivers." };
+  const authorizedWarehouseId = await resolveAuthorizedWarehouseId(client, warehouseId);
+  if (!authorizedWarehouseId) return { ...initial, message: "You are not authorized to create drivers in that warehouse." };
 
   const { error } = await client.rpc("create_driver", {
-    p_warehouse_id: warehouseId,
+    p_warehouse_id: authorizedWarehouseId,
     p_display_name: displayName,
     p_driver_code: driverCode || null,
     p_is_active: isActive,
@@ -52,6 +56,7 @@ export async function createDriver(_previous: CreateDriverState = initial, formD
   if (error) return { ...initial, message: creationError(error.message) };
 
   revalidatePath("/drivers");
+  revalidatePath("/fleet");
   revalidatePath("/");
   return { success: true, message: "Driver created." };
 }
@@ -71,7 +76,16 @@ export async function assignDriverToTruck(_previous: DriverAssignmentState = ass
   });
   if (error) return { ...assignmentInitial, message: assignmentError(error.message) };
 
+  const [{ data: truck }, { data: driver }] = await Promise.all([
+    client.from("trucks").select("plate_number,identity_label").eq("id", truckId).single(),
+    client.from("drivers").select("display_name").eq("id", driverId).single(),
+  ]);
+  if (truck && driver) {
+    try { await syncCameraPlateRecord({ plate: truck.plate_number, truckName: truck.identity_label, driverName: driver.display_name }); } catch { /* DB assignment remains valid. */ }
+  }
+
   revalidatePath("/drivers");
+  revalidatePath("/fleet");
   return { success: true, message: "Truck assigned." };
 }
 
@@ -90,7 +104,13 @@ export async function unassignDriverFromTruck(_previous: DriverAssignmentState =
   });
   if (error) return { ...assignmentInitial, message: assignmentError(error.message) };
 
+  const { data: truck } = await client.from("trucks").select("plate_number,identity_label").eq("id", truckId).single();
+  if (truck) {
+    try { await syncCameraPlateRecord({ plate: truck.plate_number, truckName: truck.identity_label, driverName: null }); } catch { /* DB unassignment remains valid. */ }
+  }
+
   revalidatePath("/drivers");
+  revalidatePath("/fleet");
   return { success: true, message: "Truck unassigned." };
 }
 
@@ -103,11 +123,36 @@ export async function invokeDriverAccountRequest(
   const client = await createClient();
   const { data: authData } = await client.auth.getUser();
   if (!authData.user) return { ...accountClaimInitial, message: "You must be signed in to invite drivers." };
-  const { data, error } = await client.rpc("create_account_claim_request", { p_staff_member_id: null, p_driver_id: driverId });
-  if (error || !data?.[0]?.raw_token) return { ...accountClaimInitial, message: "The account request could not be created." };
+  const { data, error } = await client.rpc("create_account_claim_request_v2", { p_staff_member_id: null, p_driver_id: driverId });
+  if (error) return { ...accountClaimInitial, message: claimRequestError(error.message) };
+  if (!data?.[0]?.raw_token) return { ...accountClaimInitial, message: "Supabase did not return a registration token." };
   const result = data[0] as { raw_token: string; expires_at: string };
+  let syncWarning = "";
+  const { data: assignedTruck } = await client
+    .from("trucks")
+    .select("plate_number,identity_label")
+    .eq("current_driver_id", driverId)
+    .maybeSingle();
+  if (assignedTruck) {
+    const { data: driver } = await client.from("drivers").select("display_name").eq("id", driverId).single();
+    if (driver) {
+      try {
+        await syncCameraPlateRecord({ plate: assignedTruck.plate_number, truckName: assignedTruck.identity_label, driverName: driver.display_name });
+      } catch {
+        syncWarning = " The account was claimed, but plates.txt could not be updated.";
+      }
+    }
+  }
   revalidatePath("/drivers");
-  return { success: true, message: "Account request created.", registrationLink: `${registrationOrigin()}/register/driver/${result.raw_token}`, expiresAt: result.expires_at };
+  return { success: true, message: `Account request created.${syncWarning}`, registrationLink: `${registrationOrigin()}/register/driver/${result.raw_token}`, expiresAt: result.expires_at };
+}
+
+function claimRequestError(message: string) {
+  if (message.includes("staff_already_claimed") || message.includes("driver_already_claimed")) return "This account is already claimed.";
+  if (message.includes("warehouse_not_owned")) return "This record belongs to a warehouse you cannot manage.";
+  if (message.includes("not_authenticated")) return "Your admin session expired. Sign in again.";
+  if (message.includes("staff_member_not_found") || message.includes("driver_not_found")) return "The member record no longer exists.";
+  return `The account request failed: ${message}`;
 }
 
 export async function revokeDriverAccountRequest(
@@ -123,4 +168,17 @@ export async function revokeDriverAccountRequest(
   if (error) return { ...accountClaimInitial, message: "The account request could not be revoked." };
   revalidatePath("/drivers");
   return { success: true, message: "Account request revoked." };
+}
+
+export async function deleteDriverRecord(_previous: DeleteDriverState = deleteDriverInitial, formData: FormData): Promise<DeleteDriverState> {
+  const driverId = String(formData.get("driverId") ?? "");
+  if (!driverId) return { ...deleteDriverInitial, message: "The driver delete request was invalid." };
+  const client = await createClient();
+  const { data: authData } = await client.auth.getUser();
+  if (!authData.user) return { ...deleteDriverInitial, message: "You must be signed in to delete driver records." };
+  const { error } = await client.rpc("delete_driver_record", { p_driver_id: driverId });
+  if (error) return { ...deleteDriverInitial, message: error.message.includes("driver_not_owned") ? "You are not authorized to delete that driver." : "The driver record could not be deleted." };
+  revalidatePath("/fleet");
+  revalidatePath("/drivers");
+  return { success: true, message: "Driver record deleted; truck kept and unassigned." };
 }

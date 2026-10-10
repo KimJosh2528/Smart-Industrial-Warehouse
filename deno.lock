@@ -1,0 +1,34 @@
+{
+  "version": "5",
+  "specifiers": {
+    "npm:libsodium-wrappers@0.7.15": "0.7.15",
+    "npm:libsodium-wrappers@~0.8.4": "0.8.4"
+  },
+  "npm": {
+    "libsodium-wrappers@0.7.15": {
+      "integrity": "sha512-E4anqJQwcfiC6+Yrl01C1m8p99wEhLmJSs0VQqST66SbQXXBoaJY0pF4BNjRYa/sOQAxx6lXAaAFIlx+15tXJQ==",
+      "dependencies": [
+        "libsodium@0.7.16"
+      ]
+    },
+    "libsodium-wrappers@0.8.4": {
+      "integrity": "sha512-mu8aAWucZjTB5O/BtGXtW4e1agy7uHxNYG7zPthmmD1jU43LCDmSWZLN4JhflbdPXj3yDO4lxM1O9hLDgIOXDw==",
+      "dependencies": [
+        "libsodium@0.8.4"
+      ]
+    },
+    "libsodium@0.7.16": {
+      "integrity": "sha512-3HrzSPuzm6Yt9aTYCDxYEG8x8/6C0+ag655Y7rhhWZM9PT4NpdnbqlzXhGZlDnkgR6MeSTnOt/VIyHLs9aSf+Q=="
+    },
+    "libsodium@0.8.4": {
+      "integrity": "sha512-lMcYaRi0zcs7tarATsQUYC7rstliIXZuoq0c6zXSgNtSNtdvBgkSegjWhpMJAXzKX3SUSwIp7+zEsob+j3LuRw=="
+    }
+  },
+  "workspace": {
+    "packageJson": {
+      "dependencies": [
+        "npm:libsodium-wrappers@~0.8.4"
+      ]
+    }
+  }
+}

@@ -11,6 +11,8 @@ interface RecordedSensorResult {
   reading_id: string;
   environmental_state: "NORMAL" | "WARNING" | "DANGER" | null;
   previous_environmental_state: "NORMAL" | "WARNING" | "DANGER" | null;
+  fire_state: "ON" | "OFF";
+  trigger_reason: string | null;
   transition_created: boolean;
   configuration_status: "configured" | "missing";
 }
@@ -53,6 +55,11 @@ Deno.serve(async (req) => {
       return jsonResponse({ status: "error", message: "invalid_request" }, 400);
     }
 
+    const areaId = typeof body.area_id === "string" ? body.area_id.trim() : "";
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(areaId)) {
+      return jsonResponse({ status: "error", message: "invalid_room" }, 400);
+    }
+
     const temperatureC = body.temperature_c;
     const humidityPct = body.humidity_pct;
     const smokeValue = body.smoke_value;
@@ -80,6 +87,7 @@ Deno.serve(async (req) => {
 
     const result = await callRpc<RecordedSensorResult[]>("record_sensor_reading", {
       p_device_id: auth.device.id,
+      p_area_id: areaId,
       p_temperature_c: temperatureC,
       p_humidity_pct: humidityPct,
       p_smoke_value: smokeValue === undefined ? null : smokeValue,
@@ -98,6 +106,8 @@ Deno.serve(async (req) => {
         reading_id: recorded.reading_id,
         environmental_state: recorded.environmental_state,
         previous_environmental_state: recorded.previous_environmental_state,
+        fire_state: recorded.fire_state,
+        trigger_reason: recorded.trigger_reason,
         transition_created: recorded.transition_created,
         configuration_status: "missing",
       }, 503);
@@ -108,6 +118,8 @@ Deno.serve(async (req) => {
       reading_id: recorded.reading_id,
       environmental_state: recorded.environmental_state,
       previous_environmental_state: recorded.previous_environmental_state,
+      fire_state: recorded.fire_state,
+      trigger_reason: recorded.trigger_reason,
       transition_created: recorded.transition_created,
       configuration_status: "configured",
     }, 201);

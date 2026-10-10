@@ -1,5 +1,7 @@
 import { createClient } from "./supabase/server";
 import type { AccountClaim } from "./account-claims";
+import { getAuthorizedWarehouses } from "./warehouse-scope";
+import type { PlatformRole } from "./warehouse-scope";
 
 export type StaffCredential = {
   id: string;
@@ -17,7 +19,9 @@ export type StaffPermission = {
 export type StaffArea = {
   id: string;
   warehouse_id: string;
+  name: string;
   area_type_code: string;
+  entrance_category: string | null;
   state: string;
 };
 
@@ -47,11 +51,15 @@ export type StaffListItem = {
   permissions: StaffPermission[];
   areas: StaffArea[];
   account_claim: AccountClaim | null;
+  member_type: "staff" | "guard";
+  camera_enabled: boolean;
+  applicant_email: string | null;
+  facebook_profile_url: string | null;
 };
 
 export type StaffData = {
   configured: boolean;
-  role: "father_admin" | "system_admin" | null;
+  role: PlatformRole;
   warehouses: StaffWarehouse[];
   departments: Record<string, StaffDepartment[]>;
   rows: StaffListItem[];
@@ -67,7 +75,7 @@ const empty = (configured = false, error: string | null = null): StaffData => ({
   error,
 });
 
-export async function loadStaffData(): Promise<StaffData> {
+export async function loadStaffData(memberType: "staff" | "guard" = "staff"): Promise<StaffData> {
   let client;
   try {
     client = await createClient();
@@ -75,41 +83,20 @@ export async function loadStaffData(): Promise<StaffData> {
     return empty(false, "Supabase is not configured.");
   }
 
-  const { data: authData } = await client.auth.getUser();
-  if (!authData.user) return empty(true, "You must be signed in to view staff.");
-
-  const { data: profile } = await client
-    .from("profiles")
-    .select("role")
-    .eq("id", authData.user.id)
-    .maybeSingle();
-  const role = profile?.role === "father_admin" || profile?.role === "system_admin"
-    ? profile.role
-    : null;
+  const scope = await getAuthorizedWarehouses(client);
+  const role = scope.role;
+  if (scope.error) return { ...empty(true, scope.error), role };
 
   // The authenticated server client and existing RLS determine which
   // warehouses are visible. No warehouse ID is accepted from the client.
-  const { data: warehouses, error: warehouseError } = await client
-    .from("warehouses")
-    .select("id,name")
-    .order("name");
-  if (warehouseError) return { ...empty(true, "Staff data could not be loaded."), role };
-
-  const visibleWarehouses = warehouses ?? [];
+  const visibleWarehouses = scope.warehouses;
   if (!visibleWarehouses.length) return { configured: true, role, warehouses: [], departments: {}, rows: [], error: null };
 
   const warehouseIds = visibleWarehouses.map((warehouse) => warehouse.id);
   const warehouseNames = new Map(visibleWarehouses.map((warehouse) => [warehouse.id, warehouse.name]));
-  const { data: departments, error: departmentError } = await client
-    .from("departments")
-    .select("id,warehouse_id,name,code,is_active")
-    .in("warehouse_id", warehouseIds)
-    .order("name");
-  if (departmentError) return { ...empty(true, "Staff data could not be loaded."), role };
-
   const { data: areaRows, error: areaError } = await client
     .from("warehouse_areas")
-    .select("id,warehouse_id,area_type_code,state")
+    .select("id,warehouse_id,name,area_type_code,entrance_category,state")
     .in("warehouse_id", warehouseIds)
     .order("area_type_code");
   if (areaError) return { ...empty(true, "Staff data could not be loaded."), role };
@@ -117,34 +104,32 @@ export async function loadStaffData(): Promise<StaffData> {
   const areasByWarehouse = new Map<string, StaffArea[]>();
   for (const area of areaRows ?? []) {
     const existing = areasByWarehouse.get(area.warehouse_id) ?? [];
-    existing.push({ id: area.id, warehouse_id: area.warehouse_id, area_type_code: area.area_type_code, state: area.state });
+    if (area.area_type_code !== "staff_entrance" || area.entrance_category !== "staff_main") continue;
+    existing.push({ id: area.id, warehouse_id: area.warehouse_id, name: area.name ?? area.area_type_code, area_type_code: area.area_type_code, entrance_category: area.entrance_category, state: area.state });
     areasByWarehouse.set(area.warehouse_id, existing);
   }
 
-  const departmentNames = new Map((departments ?? []).map((department) => [department.id, department.name]));
   const departmentsByWarehouse = new Map<string, StaffDepartment[]>();
-  for (const department of departments ?? []) {
-    if (!department.is_active) continue;
-    const existing = departmentsByWarehouse.get(department.warehouse_id) ?? [];
-    existing.push({ id: department.id, name: department.name, code: department.code });
-    departmentsByWarehouse.set(department.warehouse_id, existing);
-  }
   const { data: staffRows, error: staffError } = await client
     .from("staff_members")
-    .select("id,warehouse_id,department_id,display_name,employee_code,is_active,profile_id")
+    .select("id,warehouse_id,display_name,employee_code,is_active,profile_id,member_type")
     .in("warehouse_id", warehouseIds)
+    .eq("member_type", memberType)
     .order("display_name");
   if (staffError) return { ...empty(true, "Staff data could not be loaded."), role };
 
-  let metadataError = false;
   const rows = await Promise.all((staffRows ?? []).map(async (staff) => {
-    const [credentialsResult, permissionsResult, claimResult] = await Promise.all([
-      client.rpc("list_staff_credentials", { p_staff_member_id: staff.id }),
-      client.rpc("list_staff_area_permissions", { p_staff_member_id: staff.id }),
+    const [credentialsResult, permissionsResult, applicationResult, claimResult] = await Promise.all([
+      client.rpc("list_staff_record_credentials", { p_staff_member_id: staff.id }),
+      client.rpc("list_staff_record_permissions", { p_staff_member_id: staff.id }),
+      client.rpc("list_staff_record_application_contact", { p_staff_member_id: staff.id }),
       client.rpc("list_staff_account_claim", { p_staff_member_id: staff.id }),
     ]);
 
-    if (credentialsResult.error || permissionsResult.error || claimResult.error) metadataError = true;
+    const permissions = ((permissionsResult.data ?? []) as Array<{ id: string; area_id: string; area_type_code: string; area_state: string }>).map((permission) => {
+      const area = areasByWarehouse.get(staff.warehouse_id)?.find((candidate) => candidate.id === permission.area_id);
+      return { id: permission.id, area_id: permission.area_id, area_type_code: area?.area_type_code ?? "unknown", area_state: area?.state ?? "unknown" };
+    });
 
     return {
       id: staff.id,
@@ -153,14 +138,18 @@ export async function loadStaffData(): Promise<StaffData> {
       is_active: staff.is_active,
       profile_id: staff.profile_id,
       warehouse_id: staff.warehouse_id,
-      department_id: staff.department_id,
+      department_id: null,
       warehouse_name: warehouseNames.get(staff.warehouse_id) ?? "Unknown warehouse",
-      department_name: staff.department_id ? departmentNames.get(staff.department_id) ?? null : null,
+      department_name: null,
       departments: departmentsByWarehouse.get(staff.warehouse_id) ?? [],
       credentials: (credentialsResult.data ?? []) as StaffCredential[],
-      permissions: (permissionsResult.data ?? []) as StaffPermission[],
+      permissions: permissions as StaffPermission[],
       areas: areasByWarehouse.get(staff.warehouse_id) ?? [],
-      account_claim: ((claimResult.data ?? [])[0] as AccountClaim | undefined) ?? null,
+      account_claim: claimResult.error ? null : ((claimResult.data ?? [])[0] as AccountClaim | undefined) ?? null,
+      member_type: memberType,
+      camera_enabled: false,
+      applicant_email: (applicationResult.data?.[0] as { applicant_email?: string | null } | undefined)?.applicant_email ?? null,
+      facebook_profile_url: (applicationResult.data?.[0] as { facebook_profile_url?: string | null } | undefined)?.facebook_profile_url ?? null,
     };
   }));
 
@@ -170,6 +159,6 @@ export async function loadStaffData(): Promise<StaffData> {
     warehouses: visibleWarehouses.map((warehouse) => ({ id: warehouse.id, name: warehouse.name })),
     departments: Object.fromEntries([...departmentsByWarehouse.entries()]),
     rows,
-    error: metadataError ? "Some staff details could not be loaded." : null,
+    error: null,
   };
 }
