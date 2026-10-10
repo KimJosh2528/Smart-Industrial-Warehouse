@@ -44,8 +44,10 @@ CLOUD_STAFF_AREA_ID = os.environ.get("WG_CAMERA_STAFF_AREA_ID", os.environ.get("
 CLOUD_TRUCK_AREA_ID = os.environ.get("WG_CAMERA_TRUCK_AREA_ID", os.environ.get("WG_TRUCK_AREA", CLOUD_AREA_ID))
 CLOUD_ANON_KEY = os.environ.get("WG_ANON_KEY", "")
 CLOUD_TIMEOUT = float(os.environ.get("WG_CLOUD_TIMEOUT", "8"))
+PLATE_SYNC_SECRET = os.environ.get("WG_PLATE_SYNC_SECRET", "").strip()
 _cloud_lock = threading.Lock()
 _cloud_last_ts = 0
+_plates_lock = threading.Lock()
 
 def cloud_config_status():
     return {
@@ -54,6 +56,7 @@ def cloud_config_status():
         "secret": bool(CLOUD_DEVICE_SECRET),
         "truck_area": bool(CLOUD_TRUCK_AREA_ID),
         "anon_key": bool(CLOUD_ANON_KEY),
+        "plate_sync": bool(PLATE_SYNC_SECRET),
     }
 
 # Live view orientation (display only, does not change the checks).
@@ -164,6 +167,44 @@ def load_plates():
                 d[key] = label or plate
                 authorized_raw[key] = plate.strip()
     return d
+
+
+def file_plate_key(value):
+    """Canonical key for records written by the dashboard sync endpoint."""
+    return re.sub(r"[^A-Z0-9]", "", value.upper())
+
+
+def sync_plate_record(plate, truck_name, driver_name=None):
+    """Upsert one registered truck into the local fallback plate file."""
+    plate = plate.strip()
+    truck_name = truck_name.strip()
+    driver_name = (driver_name or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 .-]{0,63}", plate):
+        raise ValueError("invalid_plate")
+    if not re.fullmatch(r"[^\r\n,]{1,128}", truck_name):
+        raise ValueError("invalid_truck_name")
+    if driver_name and not re.fullmatch(r"[^\r\n,]{1,128}", driver_name):
+        raise ValueError("invalid_driver_name")
+
+    line = f"{plate},{truck_name} - {driver_name or '(waiting)'}"
+    plate_key = file_plate_key(plate)
+    with _plates_lock:
+        try:
+            with open(PLATES_FILE, encoding="utf-8") as file:
+                current = file.read()
+        except FileNotFoundError:
+            current = ""
+        kept = []
+        for existing in current.splitlines():
+            existing_plate, _, existing_label = existing.partition(",")
+            existing_truck = existing_label.split(" - ", 1)[0].strip()
+            if file_plate_key(existing_plate) == plate_key or existing_truck.casefold() == truck_name.casefold():
+                continue
+            if existing.strip():
+                kept.append(existing.strip())
+        kept.append(line)
+        with open(PLATES_FILE, "w", encoding="utf-8", newline="\n") as file:
+            file.write("\n".join(kept) + "\n")
 
 
 verify_det, verify_rec = make_models()      # used by /verify
@@ -669,6 +710,28 @@ def text(s):
 @app.route("/ping")
 def ping():
     return text("pong")
+
+
+@app.route("/sync-plate", methods=["POST"])
+def sync_plate():
+    """Receive a signed dashboard update and refresh the local fallback file."""
+    if not PLATE_SYNC_SECRET:
+        return Response(json.dumps({"status": "disabled"}), status=404, mimetype="application/json")
+    supplied = request.headers.get("Authorization", "")
+    expected = f"Bearer {PLATE_SYNC_SECRET}"
+    if not hmac.compare_digest(supplied, expected):
+        return Response(json.dumps({"status": "unauthorized"}), status=401, mimetype="application/json")
+    body = request.get_json(silent=True) or {}
+    plate = body.get("plate") if isinstance(body.get("plate"), str) else ""
+    truck_name = body.get("truck_name") if isinstance(body.get("truck_name"), str) else ""
+    driver_name = body.get("driver_name") if isinstance(body.get("driver_name"), str) else None
+    try:
+        sync_plate_record(plate, truck_name, driver_name)
+    except ValueError as error:
+        return Response(json.dumps({"status": "error", "message": str(error)}), status=400, mimetype="application/json")
+    except OSError:
+        return Response(json.dumps({"status": "error", "message": "plate_file_unavailable"}), status=500, mimetype="application/json")
+    return Response(json.dumps({"status": "synced"}), mimetype="application/json")
 
 
 @app.route("/")

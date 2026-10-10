@@ -12,8 +12,16 @@ $env:WG_DEVICE_SECRET = "<device secret>"
 $env:WG_CAMERA_STAFF_AREA_ID = "<staff-entrance-area-uuid>"
 $env:WG_CAMERA_TRUCK_AREA_ID = "<truck-entrance-area-uuid>"
 $env:WG_ANON_KEY = "<Supabase publishable/anon key>" # if the Edge gateway requires JWT
+$env:WG_PLATE_SYNC_SECRET = "<long random sync secret>"
 $env:CAMERA_TUNNEL_URL = "https://camera.example.com" # dashboard deployment env
 ```
+
+For the deployed dashboard, set these Vercel environment variables to the same
+values: `CAMERA_TUNNEL_URL` and `CAMERA_PLATE_SYNC_SECRET`. Truck creation and
+driver/truck pairing then call the local `/sync-plate` endpoint through the
+tunnel, so the local `plates.txt` is updated. Vercel cannot write the PC's
+filesystem directly. Keep the tunnel URL stable; a Quick Tunnel URL changes
+when Cloudflared restarts and must be updated in Vercel if it changes.
 
 Provision a separate camera device in Dashboard → Father Admin → Device Inventory.
 Do not reuse the ESP Main device because each device has its own replay-protection
