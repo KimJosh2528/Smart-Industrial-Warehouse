@@ -80,13 +80,18 @@ export async function assignDriverToTruck(_previous: DriverAssignmentState = ass
     client.from("trucks").select("plate_number,identity_label").eq("id", truckId).single(),
     client.from("drivers").select("display_name").eq("id", driverId).single(),
   ]);
+  let syncWarning = "";
   if (truck && driver) {
-    try { await syncCameraPlateRecord({ plate: truck.plate_number, truckName: truck.identity_label, driverName: driver.display_name }); } catch { /* DB assignment remains valid. */ }
+    try {
+      await syncCameraPlateRecord({ plate: truck.plate_number, truckName: truck.identity_label, driverName: driver.display_name });
+    } catch {
+      syncWarning = " Camera server sync is unavailable; the database assignment is still saved.";
+    }
   }
 
   revalidatePath("/drivers");
   revalidatePath("/fleet");
-  return { success: true, message: "Truck assigned." };
+  return { success: true, message: `Truck assigned.${syncWarning}` };
 }
 
 export async function unassignDriverFromTruck(_previous: DriverAssignmentState = assignmentInitial, formData: FormData): Promise<DriverAssignmentState> {
