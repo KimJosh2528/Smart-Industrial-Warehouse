@@ -797,11 +797,22 @@ def run_check(kind, purpose="verify"):
         busy.release()
 
     cloud = None if purpose == "enroll" else send_cloud_auth(kind, result)
+    display_result = result
+    # The cloud authorization service is authoritative when configured because
+    # it checks the live registered-truck table. Keep the local OCR result as
+    # the fallback when the bridge is unavailable.
+    if kind == "plate" and isinstance(cloud, dict):
+        cloud_status = cloud.get("status")
+        observed = str(last_detection.get("observed") or "").strip()
+        if cloud_status == "authorized":
+            display_result = f"OK {observed}" if observed else "OK authorized"
+        elif cloud_status == "denied":
+            display_result = f"DENY {observed}" if observed else "DENY unauthorized"
     last_result["cloud"] = cloud
-    last_result.update(text=result, t=time.time(), kind=kind)
+    last_result.update(text=display_result, t=time.time(), kind=kind)
     if FACE_FREEZE:
         try:
-            freeze(kind, result)
+            freeze(kind, display_result)
         except Exception as e:
             print("[SERVER] freeze error:", repr(e))
             hold["until"] = 0.0
